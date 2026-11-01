@@ -1,0 +1,25 @@
+name = "van-weather"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Run the weather check at 5 past every hour.
+[triggers]
+crons = ["5 * * * *"]
+
+[[kv_namespaces]]
+binding = "WX"
+id = "161ea7ca42f0406dbb72a57b716e783a"
+
+# Thresholds and settings. Change here or override in the dashboard.
+[vars]
+# Open-Meteo forecast thresholds (next 24h at your parked location)
+GUST_WARN_KMH = "70"       # push a warning at this gust speed
+GUST_SEVERE_KMH = "90"     # push a high-priority warning at this gust speed
+FROST_C = "0"              # overnight low at or below this
+RAIN_24H_MM = "30"         # total rain over next 24h
+FORECAST_HOURS = "24"
+# ntfy server. Default is the public one; topic is a secret.
+NTFY_URL = "https://ntfy.sh"
+# Secrets (set in dashboard → Settings → Variables and Secrets, or `wrangler secret put`):
+#   TOKEN       - shared secret the phone uses to post location
+#   NTFY_TOPIC  - your ntfy topic (treat like a password; anyone who knows it can subscribe)
