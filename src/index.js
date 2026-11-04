@@ -39,16 +39,17 @@ export default {
 // ---------------------------------------------------------------- auth
 
 function authorised(request, url, env) {
-  if (!env.TOKEN) return false;
-  const q = url.searchParams.get("token");
-  if (q && q === env.TOKEN) return true;
+  const want = (env.TOKEN || "").trim();
+  if (!want) return false;
+  const ok = (got) => typeof got === "string" && got.trim() === want;
+  if (ok(url.searchParams.get("token"))) return true;
   const h = request.headers.get("authorization") || "";
-  if (h.startsWith("Bearer ") && h.slice(7) === env.TOKEN) return true;
+  if (h.startsWith("Bearer ") && ok(h.slice(7))) return true;
   if (h.startsWith("Basic ")) {
     // OwnTracks HTTP mode uses basic auth: any username, password = token
     try {
-      const [, pass] = atob(h.slice(6)).split(":");
-      if (pass === env.TOKEN) return true;
+      const pass = atob(h.slice(6)).split(":").slice(1).join(":");
+      if (ok(pass)) return true;
     } catch {}
   }
   return false;
@@ -498,9 +499,10 @@ const HTML = `<!doctype html>
   input{width:100%;padding:12px;font-size:16px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#eee;box-sizing:border-box}
   pre{background:#1a1a1a;padding:12px;border-radius:8px;white-space:pre-wrap;font-size:13px;overflow:auto}
   .ok{color:#6c6}.err{color:#f66}
+  .tokrow{display:flex;align-items:center;gap:8px}.tokrow input{flex:1}#tokstate{width:24px;text-align:center}
 </style>
 <h1>🚐 van-weather</h1>
-<input id="tok" placeholder="token" type="password">
+<div class="tokrow"><input id="tok" placeholder="token" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text"><span id="tokstate"></span></div>
 <button onclick="here()">📍 I'm here</button>
 <button class="sec" onclick="check()">Check now</button>
 <p style="margin:16px 0 4px;color:#999">Test alerts</p>
@@ -514,17 +516,20 @@ const HTML = `<!doctype html>
 <div id="msg"></div>
 <pre id="out">loading…</pre>
 <script>
-const tok=document.getElementById('tok'),out=document.getElementById('out'),msg=document.getElementById('msg');
+const tok=document.getElementById('tok'),out=document.getElementById('out'),msg=document.getElementById('msg'),st=document.getElementById('tokstate');
 const q=new URLSearchParams(location.search);
-if(q.get('token')){tok.value=q.get('token');history.replaceState({}, '', '/')}else tok.value=localStorage.token||'';
-const auth=()=>({authorization:'Bearer '+tok.value});
+if(q.get('token')){tok.value=q.get('token').trim();history.replaceState({}, '', '/')}else tok.value=localStorage.token||'';
+const T=()=>tok.value.trim();
+const auth=()=>({authorization:'Bearer '+T()});
 const say=(t,c)=>msg.innerHTML='<p class="'+c+'">'+t+'</p>';
-let t;tok.oninput=()=>{clearTimeout(t);t=setTimeout(refresh,400)};
+let t;tok.oninput=()=>{st.textContent='…';clearTimeout(t);t=setTimeout(refresh,500)};
+tok.onblur=refresh;tok.onkeydown=e=>{if(e.key==='Enter'){tok.blur();refresh()}};
 async function refresh(){
-  if(!tok.value){out.textContent='🔒 Enter the token to see status.';return}
-  const r=await fetch('/status',{headers:auth()});
-  if(r.status===401){delete localStorage.token;out.textContent='🔒 Wrong token.';return}
-  localStorage.token=tok.value;
+  if(!T()){st.textContent='';out.textContent='🔒 Enter the token to see status.';return}
+  let r;try{r=await fetch('/status',{headers:auth()})}catch(e){st.textContent='⚠️';out.textContent='Network error: '+e.message;return}
+  if(r.status===401){delete localStorage.token;st.textContent='✗';out.textContent='🔒 Wrong token ('+T().length+' chars sent).';return}
+  if(!r.ok){st.textContent='⚠️';out.textContent='Server error '+r.status;return}
+  localStorage.token=T();st.textContent='✓';
   out.textContent=JSON.stringify(await r.json(),null,2);
 }
 function here(){

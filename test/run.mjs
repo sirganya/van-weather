@@ -111,6 +111,8 @@ assert((await r.json()).ok, "manual post ok");
 assert(pushes.length === 6, "nearby move doesn't trigger a check");
 assert((await call("/status")).status === 401, "status requires token");
 assert((await call("/status?token=wrong")).status === 401, "status rejects wrong token");
+assert((await call("/status?token=s3cret%20")).status === 200, "token with trailing space accepted");
+assert((await worker.fetch(new Request("https://van.example/status?token=s3cret"), { ...env, TOKEN: " s3cret\n" }, ctx)).status === 200, "secret with whitespace accepted");
 r = await call("/status?token=s3cret");
 assert((await r.json()).loc.lat === 53.81, "status reflects latest location");
 
