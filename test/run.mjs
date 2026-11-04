@@ -7,7 +7,7 @@ const WX = {
   put: async (k, v) => { store.set(k, v); },
   delete: async (k) => { store.delete(k); },
 };
-const env = { WX, TOKEN: "s3cret", PUSHOVER_TOKEN: "apptoken", PUSHOVER_USER: "userkey", GUST_WARN_KMH: "70", GUST_SEVERE_KMH: "90", FROST_C: "0", RAIN_24H_MM: "30", FORECAST_HOURS: "36" };
+const env = { WX, TOKEN: "s3cret", PUSHOVER_TOKEN: "apptoken", PUSHOVER_USER: "userkey", GUST_WARN_KMH: "70", GUST_SEVERE_KMH: "90", FROST_C: "0", RAIN_24H_MM: "40", RAIN_HOURLY_MM: "10", FORECAST_HOURS: "36" };
 
 const pushes = [];
 const meteoalarmXml = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:cap="urn:oasis:names:tc:emergency:cap:1.2">

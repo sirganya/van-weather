@@ -311,13 +311,17 @@ async function openMeteo(env, loc) {
       body: `From ${fmtT(times[temps.findIndex((t) => t <= frostC)])}${frostEnd(temps, times, frostC)}.`,
     });
   }
-  if (rain24 >= (+env.RAIN_24H_MM || 30)) {
+  // Serious rain only: a big 24h total, or a torrential hour. Ordinary wet days don't alert.
+  const maxHr = Math.max(...rain.slice(0, 24)), iHr = rain.indexOf(maxHr);
+  const rainTotal = +env.RAIN_24H_MM || 40, rainHourly = +env.RAIN_HOURLY_MM || 10;
+  if (rain24 >= rainTotal || maxHr >= rainHourly) {
+    const torrential = maxHr >= rainHourly;
     alerts.push({
       id: `fc:rain:${today}`,
-      level: rain24 >= 60 ? 2 : 1,
+      level: rain24 >= 1.5 * rainTotal || maxHr >= 2 * rainHourly ? 2 : 1,
       priority: 3,
-      title: `Heavy rain — ${Math.round(rain24)} mm in 24h`,
-      body: `Starts ${fmtT(times[Math.max(0, rain.findIndex((x) => x >= 1))])}.`,
+      title: torrential ? `Torrential rain — ${Math.round(maxHr)} mm/h` : `Heavy rain — ${Math.round(rain24)} mm in 24h`,
+      body: torrential ? `Heaviest ${fmtT(times[iHr])}; ${Math.round(rain24)} mm over 24h.` : `Starts ${fmtT(times[Math.max(0, rain.findIndex((x) => x >= 1))])}.`,
     });
   }
   return {

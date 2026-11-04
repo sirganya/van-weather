@@ -16,7 +16,8 @@ id = "161ea7ca42f0406dbb72a57b716e783a"
 GUST_WARN_KMH = "70"       # push a warning at this gust speed
 GUST_SEVERE_KMH = "90"     # push a high-priority warning at this gust speed
 FROST_C = "0"              # overnight low at or below this
-RAIN_24H_MM = "30"         # total rain over next 24h
+RAIN_24H_MM = "40"         # total rain over next 24h (serious only)
+RAIN_HOURLY_MM = "10"      # or any single hour this heavy (torrential)
 FORECAST_HOURS = "36"       # wind/frost look-ahead; rain total is always 24h
 # Secrets (set in dashboard → Settings → Variables and Secrets, or `wrangler secret put`):
 #   TOKEN           - shared secret the phone uses to post location

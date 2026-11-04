@@ -73,7 +73,7 @@ Forecast directions are model output at 10 m; terrain funnels wind, so treat the
 
 ## Tuning
 
-Thresholds live in `wrangler.toml` under `[vars]`: gust warning/severe speeds (km/h), frost temperature, 24h rain total. Defaults: 70/90 km/h, 0 °C, 30 mm. `FORECAST_HOURS` (default 36) is how far ahead wind and frost look.
+Thresholds live in `wrangler.toml` under `[vars]`: gust warning/severe speeds (km/h), frost temperature, rain (24h total or a single torrential hour). Defaults: 70/90 km/h, 0 °C, 40 mm/24h or 10 mm/h. `FORECAST_HOURS` (default 36) is how far ahead wind and frost look.
 
 ## Known limits
 
