@@ -4,7 +4,7 @@ Weather warnings for wherever the van is parked, pushed to your phone.
 
 - **Location in:** phone posts GPS to the Worker (OwnTracks in the background, or the "I'm here" button on the web page).
 - **Hourly check:** official national warnings from [Meteoalarm](https://meteoalarm.org) (all of Europe) + [Open-Meteo](https://open-meteo.com) forecast thresholds for wind gusts, frost and heavy rain.
-- **Push out:** [ntfy](https://ntfy.sh) → iPhone notification. Orange/red warnings and severe gusts go out at max priority.
+- **Push out:** [Pushover](https://pushover.net) → iPhone notification. Orange/red warnings and severe gusts go out as *emergency* (repeats until acknowledged); yellow/wind as *high* (bypasses quiet hours). ntfy can be kept as an optional backup channel.
 
 Runs on a Cloudflare Worker with one KV namespace. Free tier is plenty.
 
@@ -12,9 +12,11 @@ Runs on a Cloudflare Worker with one KV namespace. Free tier is plenty.
 
 1. Cloudflare dashboard → **Workers & Pages → Create → Import a repository** → pick `sirganya/van-weather`.
    Build command: leave empty. Deploy command: `npx wrangler deploy`. Deploy.
-2. Worker → **Settings → Variables and Secrets** → add two **secrets**:
+2. Worker → **Settings → Variables and Secrets** → add these **secrets**:
    - `TOKEN` — any long random string. The phone uses it to post location.
-   - `NTFY_TOPIC` — a long random topic name, e.g. `van-9f3k2m8x7q`. Anyone who knows it can subscribe, so make it unguessable.
+   - `PUSHOVER_TOKEN` — the API token of an application you create at pushover.net/apps/build (name it van-weather).
+   - `PUSHOVER_USER` — your user key, shown on the pushover.net dashboard.
+   - `NTFY_TOPIC` — optional. If set, every alert is also posted to this ntfy topic.
 3. Note the Worker URL, e.g. `https://van-weather.<you>.workers.dev`.
 
 Every push to `main` redeploys.
@@ -22,10 +24,10 @@ Every push to `main` redeploys.
 ## Phone setup (iPhone)
 
 **Notifications**
-1. Install the **ntfy** app from the App Store.
-2. Subscribe to your `NTFY_TOPIC`.
-3. In iOS Settings → Notifications → ntfy, allow **Critical Alerts** if offered, so a 3am wind warning breaks through silent mode.
-4. Open `https://van-weather…workers.dev/?token=YOUR_TOKEN` in Safari once (it stores the token) → tap **Test push**.
+1. Install the **Pushover** app (one-off purchase after the trial), sign in.
+2. iOS Settings → Notifications → Pushover: allow notifications, Lock Screen + Banners on, and turn on **Critical Alerts** so emergency warnings break through silent mode and Focus.
+3. Open `https://van-weather…workers.dev/?token=YOUR_TOKEN` in Safari once (it stores the token) → tap **Test push**.
+4. Optional: in the Pushover app, set Quiet Hours — normal-priority alerts (frost, rain) respect them; wind warnings don't.
 
 **Background location (recommended)**
 1. Install **OwnTracks**.

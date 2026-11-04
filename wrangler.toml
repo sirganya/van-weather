@@ -18,8 +18,10 @@ GUST_SEVERE_KMH = "90"     # push a high-priority warning at this gust speed
 FROST_C = "0"              # overnight low at or below this
 RAIN_24H_MM = "30"         # total rain over next 24h
 FORECAST_HOURS = "24"
-# ntfy server. Default is the public one; topic is a secret.
+# Optional ntfy backup. Only used if the NTFY_TOPIC secret is set.
 NTFY_URL = "https://ntfy.sh"
 # Secrets (set in dashboard → Settings → Variables and Secrets, or `wrangler secret put`):
-#   TOKEN       - shared secret the phone uses to post location
-#   NTFY_TOPIC  - your ntfy topic (treat like a password; anyone who knows it can subscribe)
+#   TOKEN           - shared secret the phone uses to post location
+#   PUSHOVER_TOKEN  - Pushover application API token
+#   PUSHOVER_USER   - your Pushover user key
+#   NTFY_TOPIC      - (optional) ntfy topic as a backup channel

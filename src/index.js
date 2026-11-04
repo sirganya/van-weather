@@ -21,9 +21,9 @@ export default {
     if (path === "/test") {
       try {
         const res = await notify(env, { title: "van-weather test", body: "Push is working.", priority: 3, tags: "white_check_mark" });
-        return json({ ok: true, server: env.NTFY_URL || "https://ntfy.sh", topic: env.NTFY_TOPIC, ntfy: res });
+        return json({ ok: true, sent: res });
       } catch (e) {
-        return json({ ok: false, error: String(e.message || e), server: env.NTFY_URL || "https://ntfy.sh", topicSet: !!env.NTFY_TOPIC });
+        return json({ ok: false, error: String(e.message || e), pushover: !!(env.PUSHOVER_TOKEN && env.PUSHOVER_USER), ntfy: !!env.NTFY_TOPIC });
       }
     }
     return new Response("not found", { status: 404 });
@@ -331,13 +331,46 @@ async function openMeteo(env, loc) {
 
 // ---------------------------------------------------------------- push
 
+// Sends via Pushover (primary) and ntfy (optional backup) — whichever are configured.
+// `priority` uses the 1–5 scale used throughout: 5 = emergency, 4 = high, 3 = normal.
 async function notify(env, { title, body, priority = 3, tags = "", click }) {
-  if (!env.NTFY_TOPIC) throw new Error("NTFY_TOPIC secret is not set on the Worker");
+  const jobs = [];
+  if (env.PUSHOVER_TOKEN && env.PUSHOVER_USER) jobs.push(["pushover", pushover(env, { title, body, priority, click })]);
+  if (env.NTFY_TOPIC) jobs.push(["ntfy", ntfy(env, { title, body, priority, tags, click })]);
+  if (!jobs.length) throw new Error("No push service configured: set PUSHOVER_TOKEN + PUSHOVER_USER (and/or NTFY_TOPIC)");
+  const results = await Promise.allSettled(jobs.map(([, p]) => p));
+  const failed = results.filter((r) => r.status === "rejected");
+  if (failed.length === results.length) throw new Error(failed.map((f) => f.reason?.message || f.reason).join("; "));
+  return Object.fromEntries(results.map((r, i) => [jobs[i][0], r.status === "fulfilled" ? r.value : { error: String(r.reason?.message || r.reason) }]));
+}
+
+async function pushover(env, { title, body, priority, click }) {
+  // Pushover priorities: 2 emergency (repeats until acknowledged), 1 high (bypasses quiet hours), 0 normal.
+  const p = priority >= 5 ? 2 : priority >= 4 ? 1 : 0;
+  const form = new URLSearchParams({
+    token: env.PUSHOVER_TOKEN.trim(),
+    user: env.PUSHOVER_USER.trim(),
+    title,
+    message: body.slice(0, 1024),
+    priority: String(p),
+    sound: p === 2 ? "siren" : p === 1 ? "alien" : "pushover",
+  });
+  if (p === 2) { form.set("retry", "300"); form.set("expire", "3600"); } // nag every 5 min for up to an hour
+  if (click) { form.set("url", click); form.set("url_title", "Open warning"); }
+  if (env.PUSHOVER_DEVICE) form.set("device", env.PUSHOVER_DEVICE);
+  const r = await fetch("https://api.pushover.net/1/messages.json", { method: "POST", body: form });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.status !== 1) throw new Error(`pushover ${r.status}: ${(j.errors || []).join(", ") || "unknown error"}`);
+  return { service: "pushover", request: j.request, priority: p };
+}
+
+async function ntfy(env, { title, body, priority, tags, click }) {
   const headers = { Title: title, Priority: String(priority), Tags: tags };
   if (click) headers.Click = click;
   const r = await fetch(`${env.NTFY_URL || "https://ntfy.sh"}/${encodeURIComponent(env.NTFY_TOPIC.trim())}`, { method: "POST", body, headers });
   if (!r.ok) throw new Error(`ntfy ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  return r.json().catch(() => ({}));
+  const j = await r.json().catch(() => ({}));
+  return { service: "ntfy", id: j.id, topic: env.NTFY_TOPIC };
 }
 
 // ---------------------------------------------------------------- status + manual page
@@ -403,6 +436,6 @@ function here(){
   },e=>say('GPS error: '+e.message,'err'),{enableHighAccuracy:true,timeout:15000});
 }
 async function check(){say('Checking…','');const r=await fetch('/check?force=1',{headers:auth()});say(r.ok?'Done':r.status===401?'Wrong token':'Failed: '+r.status,r.ok?'ok':'err');refresh()}
-async function test(){const r=await fetch('/test',{headers:auth()});if(r.status===401)return say('Wrong token','err');const j=await r.json();say(j.ok?'Test push sent to '+j.server+'/'+j.topic:'Push failed: '+j.error,j.ok?'ok':'err')}
+async function test(){const r=await fetch('/test',{headers:auth()});if(r.status===401)return say('Wrong token','err');const j=await r.json();say(j.ok?'Test push sent via '+Object.keys(j.sent).join(' + '):'Push failed: '+j.error,j.ok?'ok':'err')}
 refresh();
 </script>`;

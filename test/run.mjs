@@ -7,7 +7,7 @@ const WX = {
   put: async (k, v) => { store.set(k, v); },
   delete: async (k) => { store.delete(k); },
 };
-const env = { WX, TOKEN: "s3cret", NTFY_TOPIC: "van-test", NTFY_URL: "https://ntfy.sh", GUST_WARN_KMH: "70", GUST_SEVERE_KMH: "90", FROST_C: "0", RAIN_24H_MM: "30", FORECAST_HOURS: "24" };
+const env = { WX, TOKEN: "s3cret", PUSHOVER_TOKEN: "apptoken", PUSHOVER_USER: "userkey", NTFY_TOPIC: "van-test", NTFY_URL: "https://ntfy.sh", GUST_WARN_KMH: "70", GUST_SEVERE_KMH: "90", FROST_C: "0", RAIN_24H_MM: "30", FORECAST_HOURS: "24" };
 
 const pushes = [];
 const meteoalarmXml = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:cap="urn:oasis:names:tc:emergency:cap:1.2">
@@ -62,6 +62,7 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.includes("meteoalarm")) return new Response(meteoalarmXml, { status: 200 });
   if (url.includes("open-meteo")) return Response.json(openMeteoJson);
   if (url.includes("bigdatacloud")) return Response.json(geo);
+  if (url.includes("pushover.net")) { const f = init.body; pushes.push({ url, headers: { Title: f.get("title"), Priority: f.get("priority") }, body: f.get("message"), po: Object.fromEntries(f) }); return Response.json({ status: 1, request: "r1" }); }
   if (url.includes("ntfy.sh")) { pushes.push({ url, headers: init.headers, body: init.body }); return Response.json({ id: "x" }); }
   throw new Error("unexpected fetch " + url);
 };
@@ -87,22 +88,24 @@ assert(last.place.country === "IE", "reverse geocode → IE");
 assert(last.official.matched === 1, `meteoalarm matched Mayo only (got ${last.official.matched})`);
 assert(last.forecast.alerts.includes("fc:gust:2026-11-01") && last.forecast.alerts.includes("fc:frost:2026-11-01"), "forecast gust + frost alerts");
 assert(!last.forecast.alerts.some((a) => a.startsWith("fc:rain")), "no rain alert at 12mm");
-assert(pushes.length === 3, `3 pushes sent (got ${pushes.length})`);
-assert(pushes[0].headers.Priority === "5" && pushes[0].headers.Title.startsWith("ORANGE Wind"), "orange warning is priority 5");
+assert(pushes.length === 6, `3 alerts × 2 services sent (got ${pushes.length})`);
+const po = pushes.find((p) => p.po && p.po.title.startsWith("ORANGE Wind"));
+assert(po && po.po.priority === "2" && po.po.retry === "300", "orange warning is Pushover emergency with retry");
+assert(pushes.find((p) => !p.po && p.headers.Title.startsWith("ORANGE Wind")).headers.Priority === "5", "ntfy backup gets priority 5");
 console.log("   sample push:", pushes[0].headers.Title, "|", pushes[0].body.split("\n")[0]);
 
 // 3. second check → nothing re-sent
 await call("/check?token=s3cret");
-assert(pushes.length === 3, "no duplicate pushes on re-check");
+assert(pushes.length === 6, "no duplicate pushes on re-check");
 
 // 4. forced check → re-sends
 await call("/check?token=s3cret&force");
-assert(pushes.length === 6, "force re-sends");
+assert(pushes.length === 12, "force re-sends");
 
 // 5. manual post nearby (<15km) does not re-run check; status works
 r = await call("/loc", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer s3cret" }, body: JSON.stringify({ lat: 53.81, lon: -9.52 }) });
 assert((await r.json()).ok, "manual post ok");
-assert(pushes.length === 6, "nearby move doesn't trigger a check");
+assert(pushes.length === 12, "nearby move doesn't trigger a check");
 assert((await call("/status")).status === 401, "status requires token");
 assert((await call("/status?token=wrong")).status === 401, "status rejects wrong token");
 r = await call("/status?token=s3cret");
@@ -123,7 +126,11 @@ assert((await r.text()).includes("I'm here"), "manual page served");
 // 9. missing topic → /test reports it instead of pretending
 r = await call("/test?token=s3cret");
 assert((await r.json()).ok === true, "test push reports ok");
-const noTopic = { ...env, NTFY_TOPIC: undefined };
-r = await worker.fetch(new Request("https://van.example/test?token=s3cret"), noTopic, ctx);
+const none = { ...env, NTFY_TOPIC: undefined, PUSHOVER_TOKEN: undefined };
+r = await worker.fetch(new Request("https://van.example/test?token=s3cret"), none, ctx);
 const j = await r.json();
-assert(j.ok === false && /NTFY_TOPIC/.test(j.error), "missing NTFY_TOPIC is reported");
+assert(j.ok === false && /No push service/.test(j.error), "no service configured is reported");
+// Pushover alone, ntfy rejected → still succeeds, reports the ntfy error
+globalThis.fetch = ((orig) => async (u, i) => (String(u).includes("ntfy.sh") ? new Response("nope", { status: 500 }) : orig(u, i)))(globalThis.fetch);
+r = await call("/test?token=s3cret"); const k = await r.json();
+assert(k.ok && k.sent.pushover.request === "r1" && k.sent.ntfy.error, "pushover ok while ntfy fails");
