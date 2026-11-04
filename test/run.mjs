@@ -103,7 +103,9 @@ assert(pushes.length === 6, "force re-sends");
 r = await call("/loc", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer s3cret" }, body: JSON.stringify({ lat: 53.81, lon: -9.52 }) });
 assert((await r.json()).ok, "manual post ok");
 assert(pushes.length === 6, "nearby move doesn't trigger a check");
-r = await call("/status");
+assert((await call("/status")).status === 401, "status requires token");
+assert((await call("/status?token=wrong")).status === 401, "status rejects wrong token");
+r = await call("/status?token=s3cret");
 assert((await r.json()).loc.lat === 53.81, "status reflects latest location");
 
 // 6. scheduled handler runs

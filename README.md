@@ -41,8 +41,8 @@ Open the Worker URL in Safari, add it to the home screen, tap **I'm here** whene
 
 | Path | Auth | Purpose |
 |---|---|---|
-| `GET /` | — | Manual page: I'm here / Check now / Test push |
-| `GET /status` | — | Last location, resolved place, last check result |
+| `GET /` | — | Manual page (static; shows nothing without the token) |
+| `GET /status` | token | Last location, resolved place, last check result |
 | `POST /loc` | token | Accepts `{lat, lon}` or an OwnTracks location message |
 | `GET /check` | token | Run the check now (`?force=1` re-sends active alerts) |
 | `GET /test` | token | Send a test push |

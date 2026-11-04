@@ -9,12 +9,13 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
 
+    // The page itself is just static HTML; it shows nothing until the token is right.
     if (path === "/" && request.method === "GET") return page(env);
-    if (path === "/status") return json(await status(env));
 
     // Everything below needs the shared token.
     if (!authorised(request, url, env)) return new Response("unauthorised", { status: 401 });
 
+    if (path === "/status") return json(await status(env));
     if (path === "/loc" && request.method === "POST") return receiveLocation(request, env);
     if (path === "/check") return json(await runCheck(env, { force: url.searchParams.has("force") }));
     if (path === "/test") {
@@ -370,20 +371,27 @@ const HTML = `<!doctype html>
 <script>
 const tok=document.getElementById('tok'),out=document.getElementById('out'),msg=document.getElementById('msg');
 const q=new URLSearchParams(location.search);
-if(q.get('token')){localStorage.token=q.get('token');history.replaceState({}, '', '/')}
-tok.value=localStorage.token||'';tok.oninput=()=>localStorage.token=tok.value;
+if(q.get('token')){tok.value=q.get('token');history.replaceState({}, '', '/')}else tok.value=localStorage.token||'';
+const auth=()=>({authorization:'Bearer '+tok.value});
 const say=(t,c)=>msg.innerHTML='<p class="'+c+'">'+t+'</p>';
-async function refresh(){out.textContent=JSON.stringify(await (await fetch('/status')).json(),null,2)}
+let t;tok.oninput=()=>{clearTimeout(t);t=setTimeout(refresh,400)};
+async function refresh(){
+  if(!tok.value){out.textContent='🔒 Enter the token to see status.';return}
+  const r=await fetch('/status',{headers:auth()});
+  if(r.status===401){delete localStorage.token;out.textContent='🔒 Wrong token.';return}
+  localStorage.token=tok.value;
+  out.textContent=JSON.stringify(await r.json(),null,2);
+}
 function here(){
   if(!tok.value)return say('Enter the token first','err');
   say('Getting GPS…','');
   navigator.geolocation.getCurrentPosition(async p=>{
-    const r=await fetch('/loc',{method:'POST',headers:{'content-type':'application/json','authorization':'Bearer '+tok.value},
+    const r=await fetch('/loc',{method:'POST',headers:{'content-type':'application/json',...auth()},
       body:JSON.stringify({lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy,source:'manual'})});
-    say(r.ok?'Location saved':'Failed: '+r.status,r.ok?'ok':'err');refresh();
+    say(r.ok?'Location saved':r.status===401?'Wrong token':'Failed: '+r.status,r.ok?'ok':'err');refresh();
   },e=>say('GPS error: '+e.message,'err'),{enableHighAccuracy:true,timeout:15000});
 }
-async function check(){say('Checking…','');const r=await fetch('/check?force=1',{headers:{authorization:'Bearer '+tok.value}});say(r.ok?'Done':'Failed: '+r.status,r.ok?'ok':'err');refresh()}
-async function test(){const r=await fetch('/test',{headers:{authorization:'Bearer '+tok.value}});say(r.ok?'Test push sent':'Failed: '+r.status,r.ok?'ok':'err')}
+async function check(){say('Checking…','');const r=await fetch('/check?force=1',{headers:auth()});say(r.ok?'Done':r.status===401?'Wrong token':'Failed: '+r.status,r.ok?'ok':'err');refresh()}
+async function test(){const r=await fetch('/test',{headers:auth()});say(r.ok?'Test push sent':r.status===401?'Wrong token':'Failed: '+r.status,r.ok?'ok':'err')}
 refresh();
 </script>`;
