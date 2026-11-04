@@ -2,7 +2,7 @@
 //
 // Phone posts its location → stored in KV → hourly cron checks
 // Meteoalarm (official national warnings, all of Europe) and Open-Meteo
-// (wind gusts / frost / heavy rain thresholds) → pushes to your phone via ntfy.
+// (wind gusts / frost / heavy rain thresholds) → pushes to your phone via Pushover.
 
 export default {
   async fetch(request, env, ctx) {
@@ -20,10 +20,18 @@ export default {
     if (path === "/check") return json(await runCheck(env, { force: url.searchParams.has("force") }));
     if (path === "/test") {
       try {
-        const res = await notify(env, { title: "van-weather test", body: "Push is working.", priority: 3, tags: "white_check_mark" });
-        return json({ ok: true, sent: res });
+        const loc = await env.WX.get("loc", "json");
+        let title = "TEST — van-weather", body = "Push is working. Post a location to get a real wind outlook in the test.";
+        if (loc) {
+          const place = await resolvePlace(env, loc);
+          const fc = await openMeteo(env, loc);
+          title = `TEST — ${fc.wind.title}`;
+          body = fc.wind.body + (place.label ? `\n📍 ${place.label}` : "");
+        }
+        const res = await notify(env, { title, body, priority: 3 });
+        return json({ ok: true, sent: res, title, body });
       } catch (e) {
-        return json({ ok: false, error: String(e.message || e), pushover: !!(env.PUSHOVER_TOKEN && env.PUSHOVER_USER), ntfy: !!env.NTFY_TOPIC });
+        return json({ ok: false, error: String(e.message || e), pushoverConfigured: !!(env.PUSHOVER_TOKEN && env.PUSHOVER_USER) });
       }
     }
     return new Response("not found", { status: 404 });
@@ -125,8 +133,7 @@ async function runCheck(env, { force }) {
           title: a.title,
           body: a.body + (place.label ? `\n📍 ${place.label}` : ""),
           priority: a.priority,
-          tags: a.tags,
-          click: a.link,
+                    click: a.link,
         });
         sent[a.id] = { level: a.level, until: a.until || now + 12 * 3600e3 };
         pushed.push(a.id);
@@ -233,7 +240,6 @@ async function meteoalarm(place) {
       id,
       level,
       priority: level >= 3 ? 5 : 4,
-      tags: level >= 3 ? "rotating_light" : "warning",
       title: `${COLOUR[level]} ${event} — ${area}`,
       body: `${fmtRange(onset, tag("cap:expires"))}\n${(tag("cap:description") || tag("summary") || "").replace(/<[^>]+>/g, "").slice(0, 400)}`.trim(),
       link,
@@ -270,11 +276,11 @@ function fmtRange(a, b) {
 // ---------------------------------------------------------------- Open-Meteo thresholds
 
 async function openMeteo(env, loc) {
-  const hours = +env.FORECAST_HOURS || 24;
+  const hours = +env.FORECAST_HOURS || 36;
   const u = new URL("https://api.open-meteo.com/v1/forecast");
   u.searchParams.set("latitude", loc.lat);
   u.searchParams.set("longitude", loc.lon);
-  u.searchParams.set("hourly", "wind_gusts_10m,temperature_2m,precipitation");
+  u.searchParams.set("hourly", "wind_gusts_10m,wind_speed_10m,wind_direction_10m,temperature_2m,precipitation");
   u.searchParams.set("forecast_hours", hours);
   u.searchParams.set("wind_speed_unit", "kmh");
   u.searchParams.set("timezone", "auto");
@@ -282,25 +288,22 @@ async function openMeteo(env, loc) {
   if (!r.ok) throw new Error(`open-meteo ${r.status}`);
   const d = await r.json();
   const h = d.hourly;
-  const gusts = h.wind_gusts_10m, temps = h.temperature_2m, rain = h.precipitation, times = h.time;
+  const temps = h.temperature_2m, rain = h.precipitation, times = h.time;
 
-  const maxG = Math.max(...gusts), iG = gusts.indexOf(maxG);
   const minT = Math.min(...temps), iT = temps.indexOf(minT);
-  const rain24 = rain.reduce((s, x) => s + (x || 0), 0);
-  const day = (i) => new Date(times[i]).toLocaleString("en-IE", { weekday: "short", hour: "2-digit", minute: "2-digit" });
+  const rain24 = rain.slice(0, 24).reduce((s, x) => s + (x || 0), 0);
   const today = times[0].slice(0, 10);
 
   const alerts = [];
   const gustWarn = +env.GUST_WARN_KMH || 70, gustSevere = +env.GUST_SEVERE_KMH || 90;
-  if (maxG >= gustWarn) {
-    const severe = maxG >= gustSevere;
+  const wind = windOutlook(h, { warn: gustWarn, severe: gustSevere });
+  if (wind.alert) {
     alerts.push({
       id: `fc:gust:${today}`,
-      level: severe ? 2 : 1,
-      priority: severe ? 5 : 4,
-      tags: "dash",
-      title: `${severe ? "Severe wind" : "Wind"} — gusts to ${Math.round(maxG)} km/h`,
-      body: `Peak around ${day(iG)}. ${severe ? "Consider moving somewhere sheltered or turning nose-to-wind." : "Secure awning, check parking orientation."}`,
+      level: wind.severe ? 2 : 1,
+      priority: wind.severe ? 5 : 4,
+      title: wind.title,
+      body: wind.body,
     });
   }
   if (minT <= (+env.FROST_C || 0)) {
@@ -308,9 +311,8 @@ async function openMeteo(env, loc) {
       id: `fc:frost:${today}`,
       level: minT <= -5 ? 2 : 1,
       priority: 3,
-      tags: "snowflake",
       title: `Frost — down to ${minT.toFixed(1)}°C`,
-      body: `Coldest around ${day(iT)}. Drain or protect water lines, keep heating on.`,
+      body: `Coldest around ${fmtT(times[iT])}. Drain or protect water lines, keep heating on.`,
     });
   }
   if (rain24 >= (+env.RAIN_24H_MM || 30)) {
@@ -318,30 +320,106 @@ async function openMeteo(env, loc) {
       id: `fc:rain:${today}`,
       level: rain24 >= 60 ? 2 : 1,
       priority: 3,
-      tags: "cloud_with_rain",
-      title: `Heavy rain — ${Math.round(rain24)} mm in ${hours}h`,
+      title: `Heavy rain — ${Math.round(rain24)} mm in 24h`,
       body: "Avoid soft ground and low spots; check you can get out again.",
     });
   }
   return {
-    summary: { maxGustKmh: Math.round(maxG), minTempC: +minT.toFixed(1), rainMm: +rain24.toFixed(1), hours },
+    summary: { maxGustKmh: wind.maxGust, peak: wind.peakAt, minTempC: +minT.toFixed(1), rainMm: +rain24.toFixed(1), hours },
+    wind,
     alerts,
   };
 }
 
+// ---------------------------------------------------------------- wind: direction, duration, swing
+
+const POINTS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+const compass = (deg) => POINTS[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16];
+const fmtT = (iso) => new Date(iso).toLocaleString("en-IE", { weekday: "short", hour: "2-digit", minute: "2-digit" });
+const fmtH = (iso) => new Date(iso).toLocaleString("en-IE", { hour: "2-digit", minute: "2-digit" });
+// signed angular difference b - a in (-180, 180]
+const angDiff = (a, b) => ((b - a + 540) % 360) - 180;
+
+// Builds the wind alert text from Open-Meteo hourly arrays.
+// Reports: peak gust and when, the window(s) of strong wind, the direction at onset,
+// and every meaningful swing (≥ 30°) with the time it happens — i.e. when to turn the van.
+function windOutlook(h, { warn, severe }) {
+  const times = h.time, gusts = h.wind_gusts_10m, dirs = h.wind_direction_10m, speeds = h.wind_speed_10m || gusts;
+  const n = times.length;
+  const maxGust = Math.round(Math.max(...gusts)), iPeak = gusts.indexOf(Math.max(...gusts));
+  const out = { maxGust, peakAt: fmtT(times[iPeak]), peakDir: compass(dirs[iPeak]), alert: maxGust >= warn, severe: maxGust >= severe, windows: [] };
+
+  // Strong-wind windows: consecutive hours with gusts ≥ warn (bridge single-hour lulls).
+  let i = 0;
+  while (i < n) {
+    if (gusts[i] < warn) { i++; continue; }
+    let j = i;
+    while (j + 1 < n && (gusts[j + 1] >= warn || (j + 2 < n && gusts[j + 2] >= warn))) j++;
+    out.windows.push({ from: i, to: j }); // inclusive hour indices
+    i = j + 1;
+  }
+
+  // Direction track across the whole forecast (so we also see a swing coming before the wind picks up).
+  // Walk hourly; emit a change whenever the direction has moved ≥ 30° from the last emitted direction.
+  const track = [{ i: 0, deg: dirs[0] }];
+  for (let k = 1; k < n; k++) {
+    const last = track[track.length - 1];
+    if (Math.abs(angDiff(last.deg, dirs[k])) >= 30) track.push({ i: k, deg: dirs[k] });
+  }
+
+  if (!out.alert) {
+    out.title = `Wind outlook — gusts to ${maxGust} km/h`;
+  } else {
+    out.title = `${out.severe ? "SEVERE WIND" : "Wind"} — gusts to ${maxGust} km/h from ${out.peakDir}`;
+  }
+
+  const lines = [];
+  lines.push(`Peak ${maxGust} km/h ${fmtT(times[iPeak])} from ${out.peakDir} (${Math.round(dirs[iPeak])}°)`);
+
+  if (out.windows.length) {
+    for (const w of out.windows) {
+      const dur = w.to - w.from + 1;
+      const wmax = Math.round(Math.max(...gusts.slice(w.from, w.to + 1)));
+      lines.push(`Strong ${fmtT(times[w.from])} → ${w.to + 1 < n ? fmtT(times[w.to + 1]) : "end of forecast"} (${dur}h, to ${wmax} km/h)`);
+    }
+  }
+
+  // Direction now and swings
+  lines.push(`Now from ${compass(dirs[0])} (${Math.round(dirs[0])}°), ${Math.round(speeds[0])} km/h`);
+  const swings = track.slice(1);
+  if (!swings.length) {
+    lines.push(`Direction steady from ${compass(dirs[0])} — no swing expected`);
+  } else {
+    const parts = swings.map((t, k) => {
+      const prev = k === 0 ? track[0] : swings[k - 1];
+      const d = angDiff(prev.deg, t.deg);
+      const how = d > 0 ? "veers" : "backs";
+      return `${fmtT(times[t.i])} ${how} to ${compass(t.deg)} (${Math.round(t.deg)}°)`;
+    });
+    lines.push(`Swing: ${parts.join("; ")}`);
+    const total = angDiff(dirs[0], dirs[n - 1]);
+    lines.push(`Overall ${Math.abs(Math.round(total))}° ${total > 0 ? "clockwise" : "anticlockwise"} by ${fmtT(times[n - 1])}`);
+  }
+
+  // Parking advice: nose into the wind at onset of the strong window, re-point at each swing inside it.
+  if (out.windows.length) {
+    const w = out.windows[0];
+    const inside = swings.filter((t) => t.i >= w.from && t.i <= w.to);
+    let advice = `🚐 Nose to ${compass(dirs[w.from])} before ${fmtT(times[w.from])}`;
+    if (inside.length) advice += `; re-point ${inside.map((t) => `to ${compass(t.deg)} ~${fmtH(times[t.i])}`).join(", ")}`;
+    lines.push(advice);
+  }
+
+  out.body = lines.join("\n");
+  return out;
+}
+
 // ---------------------------------------------------------------- push
 
-// Sends via Pushover (primary) and ntfy (optional backup) — whichever are configured.
-// `priority` uses the 1–5 scale used throughout: 5 = emergency, 4 = high, 3 = normal.
-async function notify(env, { title, body, priority = 3, tags = "", click }) {
-  const jobs = [];
-  if (env.PUSHOVER_TOKEN && env.PUSHOVER_USER) jobs.push(["pushover", pushover(env, { title, body, priority, click })]);
-  if (env.NTFY_TOPIC) jobs.push(["ntfy", ntfy(env, { title, body, priority, tags, click })]);
-  if (!jobs.length) throw new Error("No push service configured: set PUSHOVER_TOKEN + PUSHOVER_USER (and/or NTFY_TOPIC)");
-  const results = await Promise.allSettled(jobs.map(([, p]) => p));
-  const failed = results.filter((r) => r.status === "rejected");
-  if (failed.length === results.length) throw new Error(failed.map((f) => f.reason?.message || f.reason).join("; "));
-  return Object.fromEntries(results.map((r, i) => [jobs[i][0], r.status === "fulfilled" ? r.value : { error: String(r.reason?.message || r.reason) }]));
+// `priority` uses a 1–5 scale throughout: 5 = emergency, 4 = high, 3 = normal.
+async function notify(env, { title, body, priority = 3, click }) {
+  if (!env.PUSHOVER_TOKEN || !env.PUSHOVER_USER) throw new Error("PUSHOVER_TOKEN and PUSHOVER_USER secrets must be set on the Worker");
+  return pushover(env, { title, body, priority, click });
 }
 
 async function pushover(env, { title, body, priority, click }) {
@@ -362,15 +440,6 @@ async function pushover(env, { title, body, priority, click }) {
   const j = await r.json().catch(() => ({}));
   if (!r.ok || j.status !== 1) throw new Error(`pushover ${r.status}: ${(j.errors || []).join(", ") || "unknown error"}`);
   return { service: "pushover", request: j.request, priority: p };
-}
-
-async function ntfy(env, { title, body, priority, tags, click }) {
-  const headers = { Title: title, Priority: String(priority), Tags: tags };
-  if (click) headers.Click = click;
-  const r = await fetch(`${env.NTFY_URL || "https://ntfy.sh"}/${encodeURIComponent(env.NTFY_TOPIC.trim())}`, { method: "POST", body, headers });
-  if (!r.ok) throw new Error(`ntfy ${r.status}: ${(await r.text()).slice(0, 200)}`);
-  const j = await r.json().catch(() => ({}));
-  return { service: "ntfy", id: j.id, topic: env.NTFY_TOPIC };
 }
 
 // ---------------------------------------------------------------- status + manual page
@@ -436,6 +505,6 @@ function here(){
   },e=>say('GPS error: '+e.message,'err'),{enableHighAccuracy:true,timeout:15000});
 }
 async function check(){say('Checking…','');const r=await fetch('/check?force=1',{headers:auth()});say(r.ok?'Done':r.status===401?'Wrong token':'Failed: '+r.status,r.ok?'ok':'err');refresh()}
-async function test(){const r=await fetch('/test',{headers:auth()});if(r.status===401)return say('Wrong token','err');const j=await r.json();say(j.ok?'Test push sent via '+Object.keys(j.sent).join(' + '):'Push failed: '+j.error,j.ok?'ok':'err')}
+async function test(){const r=await fetch('/test',{headers:auth()});if(r.status===401)return say('Wrong token','err');const j=await r.json();say(j.ok?'Test push sent:<br><b>'+j.title+'</b><br><small>'+j.body.replace(/\n/g,'<br>')+'</small>':'Push failed: '+j.error,j.ok?'ok':'err')}
 refresh();
 </script>`;

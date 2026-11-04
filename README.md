@@ -4,7 +4,7 @@ Weather warnings for wherever the van is parked, pushed to your phone.
 
 - **Location in:** phone posts GPS to the Worker (OwnTracks in the background, or the "I'm here" button on the web page).
 - **Hourly check:** official national warnings from [Meteoalarm](https://meteoalarm.org) (all of Europe) + [Open-Meteo](https://open-meteo.com) forecast thresholds for wind gusts, frost and heavy rain.
-- **Push out:** [Pushover](https://pushover.net) → iPhone notification. Orange/red warnings and severe gusts go out as *emergency* (repeats until acknowledged); yellow/wind as *high* (bypasses quiet hours). ntfy can be kept as an optional backup channel.
+- **Push out:** [Pushover](https://pushover.net) → iPhone notification. Orange/red warnings and severe gusts go out as *emergency* (repeats until acknowledged); yellow/wind as *high* (bypasses quiet hours).
 
 Runs on a Cloudflare Worker with one KV namespace. Free tier is plenty.
 
@@ -16,7 +16,6 @@ Runs on a Cloudflare Worker with one KV namespace. Free tier is plenty.
    - `TOKEN` — any long random string. The phone uses it to post location.
    - `PUSHOVER_TOKEN` — the API token of an application you create at pushover.net/apps/build (name it van-weather).
    - `PUSHOVER_USER` — your user key, shown on the pushover.net dashboard.
-   - `NTFY_TOPIC` — optional. If set, every alert is also posted to this ntfy topic.
 3. Note the Worker URL, e.g. `https://van-weather.<you>.workers.dev`.
 
 Every push to `main` redeploys.
@@ -26,7 +25,7 @@ Every push to `main` redeploys.
 **Notifications**
 1. Install the **Pushover** app (one-off purchase after the trial), sign in.
 2. iOS Settings → Notifications → Pushover: allow notifications, Lock Screen + Banners on, and turn on **Critical Alerts** so emergency warnings break through silent mode and Focus.
-3. Open `https://van-weather…workers.dev/?token=YOUR_TOKEN` in Safari once (it stores the token) → tap **Test push**.
+3. Open `https://van-weather…workers.dev/?token=YOUR_TOKEN` in Safari once (it stores the token) → tap **Test push**. The test sends a real wind outlook for your current location in the exact alert format (prefixed `TEST`).
 4. Optional: in the Pushover app, set Quiet Hours — normal-priority alerts (frost, rain) respect them; wind warnings don't.
 
 **Background location (recommended)**
@@ -47,13 +46,38 @@ Open the Worker URL in Safari, add it to the home screen, tap **I'm here** whene
 | `GET /status` | token | Last location, resolved place, last check result |
 | `POST /loc` | token | Accepts `{lat, lon}` or an OwnTracks location message |
 | `GET /check` | token | Run the check now (`?force=1` re-sends active alerts) |
-| `GET /test` | token | Send a test push |
+| `GET /test` | token | Send a test push: the current wind outlook, formatted as an alert |
 
 Token goes in `Authorization: Bearer …`, Basic auth password, or `?token=`.
 
+## Wind alerts
+
+Built for deciding how to park. Each wind alert gives:
+
+- peak gust, when, and from where (compass point + degrees)
+- the window(s) of strong wind with duration
+- the direction right now
+- every swing of ≥ 30° with the time it happens, and whether the wind veers (clockwise) or backs (anticlockwise)
+- a parking line: which way to point the nose before the wind arrives, and when to re-point if it swings during the blow
+
+Example:
+
+```
+SEVERE WIND — gusts to 96 km/h from SW
+Peak 96 km/h Sun 20:00 from SW (220°)
+Strong Sun 18:00 → Mon 03:00 (9h, to 96 km/h)
+Now from SW (220°), 25 km/h
+Swing: Sun 21:00 veers to W (265°); Mon 00:00 veers to NW (310°)
+Overall 90° clockwise by Mon 23:00
+🚐 Nose to SW before Sun 18:00; re-point to W ~21:00, to NW ~00:00
+📍 Westport, County Mayo, IE
+```
+
+Forecast directions are model output at 10 m; terrain funnels wind, so treat the compass points as a guide and check locally.
+
 ## Tuning
 
-Thresholds live in `wrangler.toml` under `[vars]`: gust warning/severe speeds (km/h), frost temperature, 24h rain total. Defaults: 70/90 km/h, 0 °C, 30 mm.
+Thresholds live in `wrangler.toml` under `[vars]`: gust warning/severe speeds (km/h), frost temperature, 24h rain total. Defaults: 70/90 km/h, 0 °C, 30 mm. `FORECAST_HOURS` (default 36) is how far ahead wind and frost look.
 
 ## Known limits
 
