@@ -275,7 +275,7 @@ async function openMeteo(env, loc) {
   const u = new URL("https://api.open-meteo.com/v1/forecast");
   u.searchParams.set("latitude", loc.lat);
   u.searchParams.set("longitude", loc.lon);
-  u.searchParams.set("hourly", "wind_gusts_10m,wind_speed_10m,wind_direction_10m,temperature_2m,precipitation");
+  u.searchParams.set("hourly", "wind_gusts_10m,wind_direction_10m,temperature_2m,precipitation");
   u.searchParams.set("forecast_hours", hours);
   u.searchParams.set("wind_speed_unit", "kmh");
   u.searchParams.set("timezone", "auto");
@@ -301,13 +301,14 @@ async function openMeteo(env, loc) {
       body: wind.body,
     });
   }
-  if (minT <= (+env.FROST_C || 0)) {
+  const frostC = +env.FROST_C || 0;
+  if (minT <= frostC) {
     alerts.push({
       id: `fc:frost:${today}`,
       level: minT <= -5 ? 2 : 1,
       priority: 3,
       title: `Frost — down to ${minT.toFixed(1)}°C`,
-      body: `Coldest around ${fmtT(times[iT])}.`,
+      body: `From ${fmtT(times[temps.findIndex((t) => t <= frostC)])}${frostEnd(temps, times, frostC)}.`,
     });
   }
   if (rain24 >= (+env.RAIN_24H_MM || 30)) {
@@ -316,7 +317,7 @@ async function openMeteo(env, loc) {
       level: rain24 >= 60 ? 2 : 1,
       priority: 3,
       title: `Heavy rain — ${Math.round(rain24)} mm in 24h`,
-      body: `Most of it ${fmtT(times[rain.slice(0, 24).indexOf(Math.max(...rain.slice(0, 24)))])}.`,
+      body: `Starts ${fmtT(times[Math.max(0, rain.findIndex((x) => x >= 1))])}.`,
     });
   }
   return {
@@ -324,6 +325,15 @@ async function openMeteo(env, loc) {
     wind,
     alerts,
   };
+}
+
+// " until Mon 09:00" if the forecast shows the thaw, else ""
+function frostEnd(temps, times, frostC) {
+  const i = temps.findIndex((t) => t <= frostC);
+  if (i < 0) return "";
+  let j = i;
+  while (j + 1 < temps.length && temps[j + 1] <= frostC) j++;
+  return j + 1 < temps.length ? ` until ${fmtT(times[j + 1])}` : "";
 }
 
 // ---------------------------------------------------------------- wind: direction, duration, swing
@@ -339,7 +349,7 @@ const angDiff = (a, b) => ((b - a + 540) % 360) - 180;
 // Reports: peak gust and when, the window(s) of strong wind, the direction at onset,
 // and every meaningful swing (≥ 30°) with the time it happens — i.e. when to turn the van.
 function windOutlook(h, { warn, severe }) {
-  const times = h.time, gusts = h.wind_gusts_10m, dirs = h.wind_direction_10m, speeds = h.wind_speed_10m || gusts;
+  const times = h.time, gusts = h.wind_gusts_10m, dirs = h.wind_direction_10m;
   const n = times.length;
   const maxGust = Math.round(Math.max(...gusts)), iPeak = gusts.indexOf(Math.max(...gusts));
   const out = { maxGust, peakAt: fmtT(times[iPeak]), peakDir: compass(dirs[iPeak]), alert: maxGust >= warn, severe: maxGust >= severe, windows: [] };
@@ -379,8 +389,7 @@ function windOutlook(h, { warn, severe }) {
     }
   }
 
-  // Direction now and swings
-  lines.push(`Now from ${compass(dirs[0])} (${Math.round(dirs[0])}°), ${Math.round(speeds[0])} km/h`);
+  // Swings
   const swings = track.slice(1);
   if (!swings.length) {
     lines.push(`Direction steady from ${compass(dirs[0])} — no swing expected`);
@@ -422,10 +431,10 @@ async function sampleAlert(env, type) {
     return { title: w.title, body: w.body + tag, priority: 5 };
   }
   if (type === "frost") {
-    return { title: "Frost — down to -2.4°C", body: `Coldest around ${fmtT(times[19])}.${tag}`, priority: 3 };
+    return { title: "Frost — down to -2.4°C", body: `From ${fmtT(times[17])} until ${fmtT(times[23])}.${tag}`, priority: 3 };
   }
   if (type === "rain") {
-    return { title: "Heavy rain — 42 mm in 24h", body: `Most of it ${fmtT(times[7])}.${tag}`, priority: 3 };
+    return { title: "Heavy rain — 42 mm in 24h", body: `Starts ${fmtT(times[5])}.${tag}`, priority: 3 };
   }
   if (type === "official") {
     const area = (place.names?.find((n) => !/ireland|connacht|munster|leinster|ulster/i.test(n)) || "Mayo").replace(/^County /, "");

@@ -56,7 +56,6 @@ Built for deciding how to park. Each wind alert gives:
 
 - peak gust, when, and from where (compass point + degrees)
 - the window(s) of strong wind with duration
-- the direction right now
 - every swing of ≥ 30° with the time it happens, and whether the wind veers (clockwise) or backs (anticlockwise)
 
 Example:
@@ -65,7 +64,6 @@ Example:
 SEVERE WIND — gusts to 96 km/h from SW
 Peak 96 km/h Sun 20:00 from SW (220°)
 Strong Sun 18:00 → Mon 03:00 (9h, to 96 km/h)
-Now from SW (220°), 25 km/h
 Swing: Sun 21:00 veers to W (265°); Mon 00:00 veers to NW (310°)
 Overall 90° clockwise by Mon 23:00
 📍 Westport, County Mayo, IE
