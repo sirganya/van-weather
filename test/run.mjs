@@ -127,9 +127,11 @@ r = await call("/");
 assert((await r.text()).includes("I'm here"), "manual page served");
 
 // 9. test push carries a real formatted outlook; missing config is reported
-r = await call("/test?token=s3cret");
-const tj = await r.json();
-assert(tj.ok && /^TEST — /.test(tj.title) && /Peak 96 km\/h/.test(tj.body), "test push is a formatted wind outlook");
+for (const [type, re, pri] of [["push", /Push is working/, 3], ["wind", /Swing:.*veers/, 5], ["official", /^ORANGE Wind — Mayo/, 5], ["frost", /^Frost/, 3], ["rain", /^Heavy rain/, 3]]) {
+  r = await call(`/test?token=s3cret&type=${type}`);
+  const tj = await r.json();
+  assert(tj.ok && (re.test(tj.title) || re.test(tj.body)) && tj.priority === pri && pushes.at(-1).po.title.startsWith("TEST — "), `test ${type} alert`);
+}
 const none = { ...env, PUSHOVER_TOKEN: undefined };
 r = await worker.fetch(new Request("https://van.example/test?token=s3cret"), none, ctx);
 const j = await r.json();

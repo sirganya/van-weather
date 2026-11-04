@@ -20,20 +20,10 @@ export default {
     if (path === "/check") return json(await runCheck(env, { force: url.searchParams.has("force") }));
     if (path === "/test") {
       try {
-        const loc = await env.WX.get("loc", "json");
-        let title = "TEST — van-weather", body = "Push is working.";
-        if (loc) {
-          const place = await resolvePlace(env, loc);
-          const fc = await openMeteo(env, loc);
-          if (fc.wind.alert) {
-            title = `TEST — ${fc.wind.title}`;
-            body = fc.wind.body + (place.label ? `\n📍 ${place.label}` : "");
-          } else {
-            body = `Push is working. No wind warning due at ${place.label || "current location"} (max gust ${fc.wind.maxGust} km/h in next ${fc.summary.hours}h).`;
-          }
-        }
-        const res = await notify(env, { title, body, priority: 3 });
-        return json({ ok: true, sent: res, title, body });
+        const type = url.searchParams.get("type") || "push";
+        const a = await sampleAlert(env, type);
+        const res = await notify(env, { title: `TEST — ${a.title}`, body: a.body, priority: a.priority, click: a.link });
+        return json({ ok: true, type, sent: res, title: a.title, body: a.body, priority: a.priority });
       } catch (e) {
         return json({ ok: false, error: String(e.message || e), pushoverConfigured: !!(env.PUSHOVER_TOKEN && env.PUSHOVER_USER) });
       }
@@ -409,6 +399,45 @@ function windOutlook(h, { warn, severe }) {
   return out;
 }
 
+// ---------------------------------------------------------------- sample alerts for the test buttons
+// Each one goes through the same formatting code as a real alert, with realistic sample data,
+// and at the priority the real alert would use — so a wind test will nag until acknowledged.
+
+async function sampleAlert(env, type) {
+  const loc = await env.WX.get("loc", "json");
+  const place = loc ? await resolvePlace(env, loc) : { label: "Westport, County Mayo, IE", names: ["Mayo"] };
+  const tag = place.label ? `\n📍 ${place.label}` : "";
+  const start = new Date(); start.setMinutes(0, 0, 0);
+  const times = Array.from({ length: 36 }, (_, i) => new Date(start.getTime() + i * 3600e3).toISOString().slice(0, 16));
+
+  if (type === "wind") {
+    const h = {
+      time: times,
+      wind_gusts_10m: times.map((_, i) => (i >= 6 && i <= 14 ? (i === 9 ? 104 : 78) : 45)),
+      wind_speed_10m: times.map((_, i) => (i >= 6 && i <= 14 ? 60 : 28)),
+      wind_direction_10m: times.map((_, i) => (i < 9 ? 215 : i < 12 ? 260 : 305)),
+    };
+    const w = windOutlook(h, { warn: +env.GUST_WARN_KMH || 70, severe: +env.GUST_SEVERE_KMH || 90 });
+    return { title: w.title, body: w.body + tag, priority: 5 };
+  }
+  if (type === "frost") {
+    return { title: "Frost — down to -2.4°C", body: `Coldest around ${fmtT(times[19])}.${tag}`, priority: 3 };
+  }
+  if (type === "rain") {
+    return { title: "Heavy rain — 42 mm in 24h", body: `Most of it ${fmtT(times[7])}.${tag}`, priority: 3 };
+  }
+  if (type === "official") {
+    const area = (place.names?.find((n) => !/ireland|connacht|munster|leinster|ulster/i.test(n)) || "Mayo").replace(/^County /, "");
+    return {
+      title: `ORANGE Wind — ${area}`,
+      body: `${fmtRange(times[6] + ":00", times[18] + ":00")}\nSouthwest winds veering westerly will reach mean speeds of 65 to 80 km/h with gusts of 110 to 130 km/h.${tag}`,
+      priority: 5,
+      link: "https://www.meteoalarm.org",
+    };
+  }
+  return { title: "van-weather", body: "Push is working.", priority: 3 };
+}
+
 // ---------------------------------------------------------------- push
 
 // `priority` uses a 1–5 scale throughout: 5 = emergency, 4 = high, 3 = normal.
@@ -465,6 +494,7 @@ const HTML = `<!doctype html>
   h1{font-size:22px;margin:0 0 16px}
   button{width:100%;padding:18px;font-size:20px;border:0;border-radius:12px;background:#2d7ef7;color:#fff;margin:8px 0}
   button.sec{background:#333}
+  .row{display:flex;gap:6px;flex-wrap:wrap}.row button{flex:1;min-width:80px;padding:12px;font-size:16px}
   input{width:100%;padding:12px;font-size:16px;border-radius:8px;border:1px solid #444;background:#1a1a1a;color:#eee;box-sizing:border-box}
   pre{background:#1a1a1a;padding:12px;border-radius:8px;white-space:pre-wrap;font-size:13px;overflow:auto}
   .ok{color:#6c6}.err{color:#f66}
@@ -473,7 +503,14 @@ const HTML = `<!doctype html>
 <input id="tok" placeholder="token" type="password">
 <button onclick="here()">📍 I'm here</button>
 <button class="sec" onclick="check()">Check now</button>
-<button class="sec" onclick="test()">Test push</button>
+<p style="margin:16px 0 4px;color:#999">Test alerts</p>
+<div class="row">
+<button class="sec" onclick="test('push')">Push</button>
+<button class="sec" onclick="test('wind')">Wind</button>
+<button class="sec" onclick="test('official')">Official</button>
+<button class="sec" onclick="test('frost')">Frost</button>
+<button class="sec" onclick="test('rain')">Rain</button>
+</div>
 <div id="msg"></div>
 <pre id="out">loading…</pre>
 <script>
@@ -500,6 +537,6 @@ function here(){
   },e=>say('GPS error: '+e.message,'err'),{enableHighAccuracy:true,timeout:15000});
 }
 async function check(){say('Checking…','');const r=await fetch('/check?force=1',{headers:auth()});say(r.ok?'Done':r.status===401?'Wrong token':'Failed: '+r.status,r.ok?'ok':'err');refresh()}
-async function test(){const r=await fetch('/test',{headers:auth()});if(r.status===401)return say('Wrong token','err');const j=await r.json();say(j.ok?'Test push sent:<br><b>'+j.title+'</b><br><small>'+j.body.replace(/\n/g,'<br>')+'</small>':'Push failed: '+j.error,j.ok?'ok':'err')}
+async function test(type){say('Sending '+type+' test…','');const r=await fetch('/test?type='+type,{headers:auth()});if(r.status===401)return say('Wrong token','err');const j=await r.json();say(j.ok?'Test push sent:<br><b>'+j.title+'</b><br><small>'+j.body.replace(/\n/g,'<br>')+'</small>':'Push failed: '+j.error,j.ok?'ok':'err')}
 refresh();
 </script>`;
