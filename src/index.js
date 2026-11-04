@@ -19,8 +19,12 @@ export default {
     if (path === "/loc" && request.method === "POST") return receiveLocation(request, env);
     if (path === "/check") return json(await runCheck(env, { force: url.searchParams.has("force") }));
     if (path === "/test") {
-      await notify(env, { title: "van-weather test", body: "Push is working.", priority: 3, tags: "white_check_mark" });
-      return new Response("sent");
+      try {
+        const res = await notify(env, { title: "van-weather test", body: "Push is working.", priority: 3, tags: "white_check_mark" });
+        return json({ ok: true, server: env.NTFY_URL || "https://ntfy.sh", topic: env.NTFY_TOPIC, ntfy: res });
+      } catch (e) {
+        return json({ ok: false, error: String(e.message || e), server: env.NTFY_URL || "https://ntfy.sh", topicSet: !!env.NTFY_TOPIC });
+      }
     }
     return new Response("not found", { status: 404 });
   },
@@ -111,20 +115,24 @@ async function runCheck(env, { force }) {
   // Drop expired dedupe entries
   for (const k of Object.keys(sent)) if (sent[k].until < now) delete sent[k];
 
-  const pushed = [];
+  const pushed = [], pushErrors = [];
   for (const a of [...official.alerts, ...forecast.alerts]) {
     const prev = sent[a.id];
     const escalated = prev && a.level > prev.level;
     if (force || !prev || escalated) {
-      await notify(env, {
-        title: a.title,
-        body: a.body + (place.label ? `\n📍 ${place.label}` : ""),
-        priority: a.priority,
-        tags: a.tags,
-        click: a.link,
-      });
-      sent[a.id] = { level: a.level, until: a.until || now + 12 * 3600e3 };
-      pushed.push(a.id);
+      try {
+        await notify(env, {
+          title: a.title,
+          body: a.body + (place.label ? `\n📍 ${place.label}` : ""),
+          priority: a.priority,
+          tags: a.tags,
+          click: a.link,
+        });
+        sent[a.id] = { level: a.level, until: a.until || now + 12 * 3600e3 };
+        pushed.push(a.id);
+      } catch (e) {
+        pushErrors.push(`${a.id}: ${e.message}`); // not marked sent → retried next run
+      }
     }
   }
   await env.WX.put("sent", JSON.stringify(sent));
@@ -137,6 +145,7 @@ async function runCheck(env, { force }) {
     official: { feed: official.feed, matched: official.alerts.length, total: official.total, error: official.error },
     forecast: { summary: forecast.summary, alerts: forecast.alerts.map((a) => a.id), error: forecast.error },
     pushed,
+    pushErrors: pushErrors.length ? pushErrors : undefined,
   };
   await env.WX.put("last", JSON.stringify(result));
   return result;
@@ -323,10 +332,12 @@ async function openMeteo(env, loc) {
 // ---------------------------------------------------------------- push
 
 async function notify(env, { title, body, priority = 3, tags = "", click }) {
-  if (!env.NTFY_TOPIC) return;
+  if (!env.NTFY_TOPIC) throw new Error("NTFY_TOPIC secret is not set on the Worker");
   const headers = { Title: title, Priority: String(priority), Tags: tags };
   if (click) headers.Click = click;
-  await fetch(`${env.NTFY_URL || "https://ntfy.sh"}/${env.NTFY_TOPIC}`, { method: "POST", body, headers });
+  const r = await fetch(`${env.NTFY_URL || "https://ntfy.sh"}/${encodeURIComponent(env.NTFY_TOPIC.trim())}`, { method: "POST", body, headers });
+  if (!r.ok) throw new Error(`ntfy ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  return r.json().catch(() => ({}));
 }
 
 // ---------------------------------------------------------------- status + manual page
@@ -392,6 +403,6 @@ function here(){
   },e=>say('GPS error: '+e.message,'err'),{enableHighAccuracy:true,timeout:15000});
 }
 async function check(){say('Checking…','');const r=await fetch('/check?force=1',{headers:auth()});say(r.ok?'Done':r.status===401?'Wrong token':'Failed: '+r.status,r.ok?'ok':'err');refresh()}
-async function test(){const r=await fetch('/test',{headers:auth()});say(r.ok?'Test push sent':r.status===401?'Wrong token':'Failed: '+r.status,r.ok?'ok':'err')}
+async function test(){const r=await fetch('/test',{headers:auth()});if(r.status===401)return say('Wrong token','err');const j=await r.json();say(j.ok?'Test push sent to '+j.server+'/'+j.topic:'Push failed: '+j.error,j.ok?'ok':'err')}
 refresh();
 </script>`;

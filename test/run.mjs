@@ -62,7 +62,7 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.includes("meteoalarm")) return new Response(meteoalarmXml, { status: 200 });
   if (url.includes("open-meteo")) return Response.json(openMeteoJson);
   if (url.includes("bigdatacloud")) return Response.json(geo);
-  if (url.includes("ntfy.sh")) { pushes.push({ url, headers: init.headers, body: init.body }); return new Response("ok"); }
+  if (url.includes("ntfy.sh")) { pushes.push({ url, headers: init.headers, body: init.body }); return Response.json({ id: "x" }); }
   throw new Error("unexpected fetch " + url);
 };
 
@@ -119,3 +119,11 @@ assert(pushes.at(-1).headers.Title === "van-weather test", "test push");
 // 8. page renders
 r = await call("/");
 assert((await r.text()).includes("I'm here"), "manual page served");
+
+// 9. missing topic → /test reports it instead of pretending
+r = await call("/test?token=s3cret");
+assert((await r.json()).ok === true, "test push reports ok");
+const noTopic = { ...env, NTFY_TOPIC: undefined };
+r = await worker.fetch(new Request("https://van.example/test?token=s3cret"), noTopic, ctx);
+const j = await r.json();
+assert(j.ok === false && /NTFY_TOPIC/.test(j.error), "missing NTFY_TOPIC is reported");
