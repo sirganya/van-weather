@@ -126,7 +126,12 @@ assert(pushes.at(-1).headers.Title.startsWith("TEST — "), "test push");
 
 // 8. page renders
 r = await call("/");
-assert((await r.text()).includes("I'm here"), "manual page served");
+const html = await r.text();
+assert(html.includes("I'm here"), "manual page served");
+// The page script must at least compile — a syntax error there silently kills the whole UI.
+const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+let compiles = true; try { new Function(script); } catch (e) { compiles = false; console.error("   page script error:", e.message); }
+assert(compiles, "page script compiles");
 
 // 9. test push carries a real formatted outlook; missing config is reported
 for (const [type, re, pri] of [["push", /Push is working/, 3], ["wind", /Swing:.*veers/, 5], ["official", /^ORANGE Wind — Mayo/, 5], ["frost", /^Frost/, 3], ["rain", /^Heavy rain/, 3]]) {

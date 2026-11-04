@@ -251,7 +251,7 @@ function norm(list) {
       s
         .toLowerCase()
         .normalize("NFD")
-        .replace(/[̀-ͯ]/g, "")
+        .replace(/[\u0300-\u036f]/g, "")
         .replace(/\b(county|co\.?|departement|department|province|region|district|kreis|landkreis|canton|comarca|provincia|comune)\b/g, "")
         .replace(/[^a-z0-9]+/g, " ")
         .trim()
@@ -542,6 +542,6 @@ function here(){
   },e=>say('GPS error: '+e.message,'err'),{enableHighAccuracy:true,timeout:15000});
 }
 async function check(){say('Checking…','');const r=await fetch('/check?force=1',{headers:auth()});say(r.ok?'Done':r.status===401?'Wrong token':'Failed: '+r.status,r.ok?'ok':'err');refresh()}
-async function test(type){say('Sending '+type+' test…','');const r=await fetch('/test?type='+type,{headers:auth()});if(r.status===401)return say('Wrong token','err');const j=await r.json();say(j.ok?'Test push sent:<br><b>'+j.title+'</b><br><small>'+j.body.replace(/\n/g,'<br>')+'</small>':'Push failed: '+j.error,j.ok?'ok':'err')}
+async function test(type){say('Sending '+type+' test…','');const r=await fetch('/test?type='+type,{headers:auth()});if(r.status===401)return say('Wrong token','err');const j=await r.json();say(j.ok?'Test push sent:<br><b>'+j.title+'</b><br><small>'+j.body.split(String.fromCharCode(10)).join('<br>')+'</small>':'Push failed: '+j.error,j.ok?'ok':'err')}
 refresh();
 </script>`;
