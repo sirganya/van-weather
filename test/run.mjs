@@ -90,7 +90,7 @@ assert(last.official.matched === 1, `meteoalarm matched Mayo only (got ${last.of
 assert(last.forecast.alerts.includes("fc:gust:2026-11-01") && last.forecast.alerts.includes("fc:frost:2026-11-01"), "forecast gust + frost alerts");
 assert(!last.forecast.alerts.some((a) => a.startsWith("fc:rain")), "no rain alert at 12mm");
 const windPush = pushes.find((p) => p.po && /SEVERE WIND/.test(p.po.title));
-assert(windPush && /Swing:.*veers to W.*veers to NW/.test(windPush.body) && /Nose to SW/.test(windPush.body) && /re-point to W ~.*, to NW ~/.test(windPush.body), "wind alert has direction, swing and re-point advice");
+assert(windPush && /Swing:.*veers to W.*veers to NW/.test(windPush.body) && !/Nose to/.test(windPush.body), "wind alert has direction and swing, no advice");
 console.log("--- wind alert ---\n" + windPush.po.title + "\n" + windPush.body + "\n------------------");
 assert(pushes.length === 3, `3 alerts sent (got ${pushes.length})`);
 const po = pushes.find((p) => p.po && p.po.title.startsWith("ORANGE Wind"));

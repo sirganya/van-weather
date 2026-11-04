@@ -25,7 +25,7 @@ Every push to `main` redeploys.
 **Notifications**
 1. Install the **Pushover** app (one-off purchase after the trial), sign in.
 2. iOS Settings → Notifications → Pushover: allow notifications, Lock Screen + Banners on, and turn on **Critical Alerts** so emergency warnings break through silent mode and Focus.
-3. Open `https://van-weather…workers.dev/?token=YOUR_TOKEN` in Safari once (it stores the token) → tap **Test push**. The test sends a real wind outlook for your current location in the exact alert format (prefixed `TEST`).
+3. Open `https://van-weather…workers.dev/?token=YOUR_TOKEN` in Safari once (it stores the token) → tap **Test push**. If a wind warning is due at your location it sends it in the real alert format (prefixed `TEST`); otherwise just a short "push is working".
 4. Optional: in the Pushover app, set Quiet Hours — normal-priority alerts (frost, rain) respect them; wind warnings don't.
 
 **Background location (recommended)**
@@ -46,7 +46,7 @@ Open the Worker URL in Safari, add it to the home screen, tap **I'm here** whene
 | `GET /status` | token | Last location, resolved place, last check result |
 | `POST /loc` | token | Accepts `{lat, lon}` or an OwnTracks location message |
 | `GET /check` | token | Run the check now (`?force=1` re-sends active alerts) |
-| `GET /test` | token | Send a test push: the current wind outlook, formatted as an alert |
+| `GET /test` | token | Send a test push (the pending wind alert if there is one) |
 
 Token goes in `Authorization: Bearer …`, Basic auth password, or `?token=`.
 
@@ -58,7 +58,6 @@ Built for deciding how to park. Each wind alert gives:
 - the window(s) of strong wind with duration
 - the direction right now
 - every swing of ≥ 30° with the time it happens, and whether the wind veers (clockwise) or backs (anticlockwise)
-- a parking line: which way to point the nose before the wind arrives, and when to re-point if it swings during the blow
 
 Example:
 
@@ -69,7 +68,6 @@ Strong Sun 18:00 → Mon 03:00 (9h, to 96 km/h)
 Now from SW (220°), 25 km/h
 Swing: Sun 21:00 veers to W (265°); Mon 00:00 veers to NW (310°)
 Overall 90° clockwise by Mon 23:00
-🚐 Nose to SW before Sun 18:00; re-point to W ~21:00, to NW ~00:00
 📍 Westport, County Mayo, IE
 ```
 

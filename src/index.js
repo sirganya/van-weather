@@ -21,12 +21,16 @@ export default {
     if (path === "/test") {
       try {
         const loc = await env.WX.get("loc", "json");
-        let title = "TEST — van-weather", body = "Push is working. Post a location to get a real wind outlook in the test.";
+        let title = "TEST — van-weather", body = "Push is working.";
         if (loc) {
           const place = await resolvePlace(env, loc);
           const fc = await openMeteo(env, loc);
-          title = `TEST — ${fc.wind.title}`;
-          body = fc.wind.body + (place.label ? `\n📍 ${place.label}` : "");
+          if (fc.wind.alert) {
+            title = `TEST — ${fc.wind.title}`;
+            body = fc.wind.body + (place.label ? `\n📍 ${place.label}` : "");
+          } else {
+            body = `Push is working. No wind warning due at ${place.label || "current location"} (max gust ${fc.wind.maxGust} km/h in next ${fc.summary.hours}h).`;
+          }
         }
         const res = await notify(env, { title, body, priority: 3 });
         return json({ ok: true, sent: res, title, body });
@@ -312,7 +316,7 @@ async function openMeteo(env, loc) {
       level: minT <= -5 ? 2 : 1,
       priority: 3,
       title: `Frost — down to ${minT.toFixed(1)}°C`,
-      body: `Coldest around ${fmtT(times[iT])}. Drain or protect water lines, keep heating on.`,
+      body: `Coldest around ${fmtT(times[iT])}.`,
     });
   }
   if (rain24 >= (+env.RAIN_24H_MM || 30)) {
@@ -321,7 +325,7 @@ async function openMeteo(env, loc) {
       level: rain24 >= 60 ? 2 : 1,
       priority: 3,
       title: `Heavy rain — ${Math.round(rain24)} mm in 24h`,
-      body: "Avoid soft ground and low spots; check you can get out again.",
+      body: `Most of it ${fmtT(times[rain.slice(0, 24).indexOf(Math.max(...rain.slice(0, 24)))])}.`,
     });
   }
   return {
@@ -399,15 +403,6 @@ function windOutlook(h, { warn, severe }) {
     lines.push(`Swing: ${parts.join("; ")}`);
     const total = angDiff(dirs[0], dirs[n - 1]);
     lines.push(`Overall ${Math.abs(Math.round(total))}° ${total > 0 ? "clockwise" : "anticlockwise"} by ${fmtT(times[n - 1])}`);
-  }
-
-  // Parking advice: nose into the wind at onset of the strong window, re-point at each swing inside it.
-  if (out.windows.length) {
-    const w = out.windows[0];
-    const inside = swings.filter((t) => t.i >= w.from && t.i <= w.to);
-    let advice = `🚐 Nose to ${compass(dirs[w.from])} before ${fmtT(times[w.from])}`;
-    if (inside.length) advice += `; re-point ${inside.map((t) => `to ${compass(t.deg)} ~${fmtH(times[t.i])}`).join(", ")}`;
-    lines.push(advice);
   }
 
   out.body = lines.join("\n");
