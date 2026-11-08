@@ -7,7 +7,7 @@ const WX = {
   put: async (k, v) => { store.set(k, v); },
   delete: async (k) => { store.delete(k); },
 };
-const env = { WX, TOKEN: "s3cret", PUSHOVER_TOKEN: "apptoken", PUSHOVER_USER: "userkey", GUST_WARN_KMH: "70", GUST_SEVERE_KMH: "90", FROST_C: "0", RAIN_24H_MM: "40", RAIN_HOURLY_MM: "10", FORECAST_HOURS: "36" };
+const env = { WX, TOKEN: "s3cret", PUSHOVER_TOKEN: "apptoken", PUSHOVER_USER: "userkey", GUST_WARN_KMH: "70", GUST_SEVERE_KMH: "90", FROST_C: "0", RAIN_24H_MM: "40", RAIN_HOURLY_MM: "10", FORECAST_HOURS: "48", TANK_FREEZE_C: "-2", TANK_FREEZE_HOURS: "4", TANK_HARD_C: "-5" };
 
 const pushes = [];
 const meteoalarmXml = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:cap="urn:oasis:names:tc:emergency:cap:1.2">
@@ -41,7 +41,7 @@ const meteoalarmXml = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/
 </entry>
 </feed>`;
 
-const hours = 36;
+const hours = 48;
 const t0 = new Date("2026-11-01T12:00");
 const times = Array.from({ length: hours }, (_, i) => new Date(t0.getTime() + i * 3600e3).toISOString().slice(0, 16));
 const openMeteoJson = {
@@ -50,7 +50,7 @@ const openMeteoJson = {
     wind_gusts_10m: times.map((_, i) => (i >= 6 && i <= 14 ? (i === 8 ? 96 : 75) : 40)),
     wind_speed_10m: times.map((_, i) => (i >= 6 && i <= 14 ? 55 : 25)),
     wind_direction_10m: times.map((_, i) => (i < 9 ? 220 : i < 12 ? 265 : 310)),
-    temperature_2m: times.map((_, i) => (i === 18 ? -1.2 : 6)),
+    temperature_2m: times.map((_, i) => (i === 18 ? -1.2 : i >= 40 && i <= 45 ? (i === 43 ? -4 : -3) : 6)),
     precipitation: times.map(() => 0.5),
   },
 };
@@ -87,7 +87,10 @@ assert(loc.lat === 53.8012 && loc.source === "owntracks", "location stored");
 const last = JSON.parse(store.get("last"));
 assert(last.place.country === "IE", "reverse geocode → IE");
 assert(last.official.matched === 1, `meteoalarm matched Mayo only (got ${last.official.matched})`);
-assert(last.forecast.alerts.includes("fc:gust:2026-11-01") && last.forecast.alerts.includes("fc:frost:2026-11-01"), "forecast gust + frost alerts");
+assert(last.forecast.alerts.includes("fc:gust:2026-11-01") && last.forecast.alerts.some((a) => a.startsWith("fc:tank:")) && !last.forecast.alerts.some((a) => a.startsWith("fc:frost")), "forecast gust + tank alerts (tank supersedes frost)");
+const tankPush = pushes.find((p) => p.po && /TANK FREEZE/.test(p.po.title));
+assert(tankPush && tankPush.po.priority === "1" && /Below -2°C from .* until .* \(6h\)/.test(tankPush.body) && /Coldest -4\.0°C/.test(tankPush.body), "tank alert: high priority, spell start/end/duration, min temp");
+console.log("--- tank alert ---\n" + tankPush.po.title + "\n" + tankPush.body + "\n------------------");
 assert(!last.forecast.alerts.some((a) => a.startsWith("fc:rain")), "no rain alert at 12mm");
 const windPush = pushes.find((p) => p.po && /SEVERE WIND/.test(p.po.title));
 assert(windPush && /Swing:.*veers to W.*veers to NW/.test(windPush.body) && !/Nose to/.test(windPush.body), "wind alert has direction and swing, no advice");
@@ -134,7 +137,7 @@ let compiles = true; try { new Function(script); } catch (e) { compiles = false;
 assert(compiles, "page script compiles");
 
 // 9. test push carries a real formatted outlook; missing config is reported
-for (const [type, re, pri] of [["push", /Push is working/, 3], ["wind", /Swing:.*veers/, 5], ["official", /^ORANGE Wind — Mayo/, 5], ["frost", /^Frost/, 3], ["rain", /^Heavy rain/, 3]]) {
+for (const [type, re, pri] of [["push", /Push is working/, 3], ["wind", /Swing:.*veers/, 5], ["official", /^ORANGE Wind — Mayo/, 5], ["frost", /^Frost/, 3], ["tank", /^TANK FREEZE/, 4], ["rain", /^Heavy rain/, 3]]) {
   r = await call(`/test?token=s3cret&type=${type}`);
   const tj = await r.json();
   assert(tj.ok && (re.test(tj.title) || re.test(tj.body)) && tj.priority === pri && pushes.at(-1).po.title.startsWith("TEST — "), `test ${type} alert`);

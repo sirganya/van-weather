@@ -301,8 +301,23 @@ async function openMeteo(env, loc) {
       body: wind.body,
     });
   }
+  // Tank-freeze risk: a sustained spell at or below TANK_FREEZE_C, or any hour at or below TANK_HARD_C.
+  const tank = tankFreeze(temps, times, {
+    cold: env.TANK_FREEZE_C === undefined ? -2 : +env.TANK_FREEZE_C,
+    hours: +env.TANK_FREEZE_HOURS || 4,
+    hard: env.TANK_HARD_C === undefined ? -5 : +env.TANK_HARD_C,
+  });
+  if (tank) {
+    alerts.push({
+      id: `fc:tank:${times[tank.start].slice(0, 10)}`,
+      level: tank.min <= -8 ? 3 : tank.min <= -5 ? 2 : 1,
+      priority: 4,
+      title: `TANK FREEZE RISK — down to ${tank.min.toFixed(1)}°C`,
+      body: tank.body,
+    });
+  }
   const frostC = +env.FROST_C || 0;
-  if (minT <= frostC) {
+  if (minT <= frostC && !tank) {
     alerts.push({
       id: `fc:frost:${today}`,
       level: minT <= -5 ? 2 : 1,
@@ -329,6 +344,32 @@ async function openMeteo(env, loc) {
     wind,
     alerts,
   };
+}
+
+// Finds the first spell that threatens the water tanks. Returns null if none.
+function tankFreeze(temps, times, { cold, hours, hard }) {
+  const n = temps.length;
+  let i = 0;
+  while (i < n) {
+    if (temps[i] > cold) { i++; continue; }
+    let j = i;
+    while (j + 1 < n && temps[j + 1] <= cold) j++;
+    const len = j - i + 1;
+    const min = Math.min(...temps.slice(i, j + 1));
+    if (len >= hours || min <= hard) {
+      const end = j + 1 < n ? `until ${fmtT(times[j + 1])}` : "beyond the forecast";
+      const spells = [];
+      spells.push(`Below ${cold}°C from ${fmtT(times[i])} ${end} (${len}h)`);
+      spells.push(`Coldest ${min.toFixed(1)}°C ${fmtT(times[temps.indexOf(min)])}`);
+      // Any further spells in the window
+      let k = j + 1, extra = 0;
+      while (k < n) { if (temps[k] <= cold) { extra++; while (k + 1 < n && temps[k + 1] <= cold) k++; } k++; }
+      if (extra) spells.push(`${extra} more cold spell${extra > 1 ? "s" : ""} later in the forecast`);
+      return { start: i, end: j, min, body: spells.join("\n") };
+    }
+    i = j + 1;
+  }
+  return null;
 }
 
 // " until Mon 09:00" if the forecast shows the thaw, else ""
@@ -434,6 +475,9 @@ async function sampleAlert(env, type) {
     const w = windOutlook(h, { warn: +env.GUST_WARN_KMH || 70, severe: +env.GUST_SEVERE_KMH || 90 });
     return { title: w.title, body: w.body + tag, priority: 5 };
   }
+  if (type === "tank") {
+    return { title: "TANK FREEZE RISK — down to -4.6°C", body: `Below -2°C from ${fmtT(times[15])} until ${fmtT(times[23])} (8h)\nColdest -4.6°C ${fmtT(times[20])}\n1 more cold spell later in the forecast${tag}`, priority: 4 };
+  }
   if (type === "frost") {
     return { title: "Frost — down to -2.4°C", body: `From ${fmtT(times[17])} until ${fmtT(times[23])}.${tag}`, priority: 3 };
   }
@@ -524,6 +568,7 @@ const HTML = `<!doctype html>
 <button class="sec" onclick="test('wind')">Wind</button>
 <button class="sec" onclick="test('official')">Official</button>
 <button class="sec" onclick="test('frost')">Frost</button>
+<button class="sec" onclick="test('tank')">Tank</button>
 <button class="sec" onclick="test('rain')">Rain</button>
 </div>
 <div id="msg"></div>

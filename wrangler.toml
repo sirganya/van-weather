@@ -15,10 +15,13 @@ id = "161ea7ca42f0406dbb72a57b716e783a"
 # Open-Meteo forecast thresholds (next 24h at your parked location)
 GUST_WARN_KMH = "70"       # push a warning at this gust speed
 GUST_SEVERE_KMH = "90"     # push a high-priority warning at this gust speed
-FROST_C = "0"              # overnight low at or below this
+FROST_C = "0"              # light frost notice (normal priority)
+TANK_FREEZE_C = "-2"       # tank-freeze risk: sustained at or below this...
+TANK_FREEZE_HOURS = "4"    # ...for this many consecutive hours
+TANK_HARD_C = "-5"         # or any single hour this cold (high priority alert either way)
 RAIN_24H_MM = "40"         # total rain over next 24h (serious only)
 RAIN_HOURLY_MM = "10"      # or any single hour this heavy (torrential)
-FORECAST_HOURS = "36"       # wind/frost look-ahead; rain total is always 24h
+FORECAST_HOURS = "48"       # wind/frost/tank look-ahead; rain total is always 24h
 # Secrets (set in dashboard → Settings → Variables and Secrets, or `wrangler secret put`):
 #   TOKEN           - shared secret the phone uses to post location
 #   PUSHOVER_TOKEN  - Pushover application API token

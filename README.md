@@ -71,9 +71,16 @@ Overall 90° clockwise by Mon 23:00
 
 Forecast directions are model output at 10 m; terrain funnels wind, so treat the compass points as a guide and check locally.
 
+## Frost and water tanks
+
+Two separate alerts:
+
+- **Frost** (normal priority): first hour at or below 0 °C and when it thaws. Informational.
+- **TANK FREEZE RISK** (high priority): a spell at or below −2 °C lasting 4 hours or more, or any single hour at or below −5 °C. Gives when the spell starts, when it ends, its length, the coldest hour, and whether more spells follow in the 48-hour window. When this fires, the plain frost alert is suppressed.
+
 ## Tuning
 
-Thresholds live in `wrangler.toml` under `[vars]`: gust warning/severe speeds (km/h), frost temperature, rain (24h total or a single torrential hour). Defaults: 70/90 km/h, 0 °C, 40 mm/24h or 10 mm/h. `FORECAST_HOURS` (default 36) is how far ahead wind and frost look.
+Thresholds live in `wrangler.toml` under `[vars]`: gust warning/severe speeds (km/h), frost temperature, tank-freeze temperature/duration/hard limit, rain (24h total or a single torrential hour). Defaults: 70/90 km/h, 0 °C, −2 °C for 4 h or −5 °C, 40 mm/24h or 10 mm/h. `FORECAST_HOURS` (default 48) is how far ahead wind, frost and tank checks look.
 
 ## Known limits
 
