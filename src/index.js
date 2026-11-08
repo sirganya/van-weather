@@ -301,8 +301,36 @@ async function openMeteo(env, loc) {
       body: wind.body,
     });
   }
-  // Tank-freeze risk: a sustained spell at or below TANK_FREEZE_C, or any hour at or below TANK_HARD_C.
-  const tank = tankFreeze(temps, times, {
+  // Grey tank (external, heated): more sensitive. Heads-up when the spell first appears in the
+  // forecast, then an emergency "heater on" when it's within GREY_LEAD_HOURS.
+  const grey = coldSpell(temps, times, {
+    cold: env.GREY_FREEZE_C === undefined ? 0 : +env.GREY_FREEZE_C,
+    hours: +env.GREY_FREEZE_HOURS || 2,
+    hard: env.GREY_HARD_C === undefined ? -2 : +env.GREY_HARD_C,
+  });
+  if (grey) {
+    const lead = +env.GREY_LEAD_HOURS || 3;
+    const startDay = times[grey.start].slice(0, 10);
+    const onBy = grey.start > 0 ? fmtT(times[Math.max(0, grey.start - 1)]) : "now";
+    alerts.push({
+      id: `fc:grey:${startDay}`,
+      level: grey.min <= -5 ? 2 : 1,
+      priority: 4,
+      title: `GREY TANK — heater on by ${onBy}`,
+      body: grey.body,
+    });
+    if (grey.start <= lead) {
+      alerts.push({
+        id: `fc:grey:${startDay}:now`,
+        level: 1,
+        priority: 5,
+        title: grey.start === 0 ? "GREY TANK HEATER ON — freezing now" : `GREY TANK HEATER ON — freezing in ${grey.start}h`,
+        body: grey.body,
+      });
+    }
+  }
+  // Fresh tank (inboard): a sustained spell at or below TANK_FREEZE_C, or any hour at or below TANK_HARD_C.
+  const tank = coldSpell(temps, times, {
     cold: env.TANK_FREEZE_C === undefined ? -2 : +env.TANK_FREEZE_C,
     hours: +env.TANK_FREEZE_HOURS || 4,
     hard: env.TANK_HARD_C === undefined ? -5 : +env.TANK_HARD_C,
@@ -312,12 +340,12 @@ async function openMeteo(env, loc) {
       id: `fc:tank:${times[tank.start].slice(0, 10)}`,
       level: tank.min <= -8 ? 3 : tank.min <= -5 ? 2 : 1,
       priority: 4,
-      title: `TANK FREEZE RISK — down to ${tank.min.toFixed(1)}°C`,
+      title: `FRESH TANK FREEZE RISK — down to ${tank.min.toFixed(1)}°C`,
       body: tank.body,
     });
   }
   const frostC = +env.FROST_C || 0;
-  if (minT <= frostC && !tank) {
+  if (minT <= frostC && !tank && !grey) {
     alerts.push({
       id: `fc:frost:${today}`,
       level: minT <= -5 ? 2 : 1,
@@ -346,8 +374,8 @@ async function openMeteo(env, loc) {
   };
 }
 
-// Finds the first spell that threatens the water tanks. Returns null if none.
-function tankFreeze(temps, times, { cold, hours, hard }) {
+// Finds the first cold spell: at or below `cold` for at least `hours` consecutive hours, or any hour at or below `hard`.
+function coldSpell(temps, times, { cold, hours, hard }) {
   const n = temps.length;
   let i = 0;
   while (i < n) {
@@ -357,15 +385,14 @@ function tankFreeze(temps, times, { cold, hours, hard }) {
     const len = j - i + 1;
     const min = Math.min(...temps.slice(i, j + 1));
     if (len >= hours || min <= hard) {
-      const end = j + 1 < n ? `until ${fmtT(times[j + 1])}` : "beyond the forecast";
-      const spells = [];
-      spells.push(`Below ${cold}°C from ${fmtT(times[i])} ${end} (${len}h)`);
-      spells.push(`Coldest ${min.toFixed(1)}°C ${fmtT(times[temps.indexOf(min)])}`);
-      // Any further spells in the window
       let k = j + 1, extra = 0;
       while (k < n) { if (temps[k] <= cold) { extra++; while (k + 1 < n && temps[k + 1] <= cold) k++; } k++; }
-      if (extra) spells.push(`${extra} more cold spell${extra > 1 ? "s" : ""} later in the forecast`);
-      return { start: i, end: j, min, body: spells.join("\n") };
+      const lines = [
+        `Below ${cold}°C from ${fmtT(times[i])} ${j + 1 < n ? `until ${fmtT(times[j + 1])}` : "beyond the forecast"} (${len}h)`,
+        `Coldest ${min.toFixed(1)}°C ${fmtT(times[temps.indexOf(min)])}`,
+      ];
+      if (extra) lines.push(`${extra} more cold spell${extra > 1 ? "s" : ""} later in the forecast`);
+      return { start: i, end: j, min, len, body: lines.join("\n") };
     }
     i = j + 1;
   }
@@ -475,8 +502,14 @@ async function sampleAlert(env, type) {
     const w = windOutlook(h, { warn: +env.GUST_WARN_KMH || 70, severe: +env.GUST_SEVERE_KMH || 90 });
     return { title: w.title, body: w.body + tag, priority: 5 };
   }
+  if (type === "grey") {
+    return { title: `GREY TANK — heater on by ${fmtT(times[22])}`, body: `Below 0°C from ${fmtT(times[23])} until ${fmtT(times[33])} (10h)\nColdest -3.1°C ${fmtT(times[29])}${tag}`, priority: 4 };
+  }
+  if (type === "greynow") {
+    return { title: "GREY TANK HEATER ON — freezing in 2h", body: `Below 0°C from ${fmtT(times[2])} until ${fmtT(times[12])} (10h)\nColdest -3.1°C ${fmtT(times[8])}${tag}`, priority: 5 };
+  }
   if (type === "tank") {
-    return { title: "TANK FREEZE RISK — down to -4.6°C", body: `Below -2°C from ${fmtT(times[15])} until ${fmtT(times[23])} (8h)\nColdest -4.6°C ${fmtT(times[20])}\n1 more cold spell later in the forecast${tag}`, priority: 4 };
+    return { title: "FRESH TANK FREEZE RISK — down to -4.6°C", body: `Below -2°C from ${fmtT(times[15])} until ${fmtT(times[23])} (8h)\nColdest -4.6°C ${fmtT(times[20])}\n1 more cold spell later in the forecast${tag}`, priority: 4 };
   }
   if (type === "frost") {
     return { title: "Frost — down to -2.4°C", body: `From ${fmtT(times[17])} until ${fmtT(times[23])}.${tag}`, priority: 3 };
@@ -568,7 +601,9 @@ const HTML = `<!doctype html>
 <button class="sec" onclick="test('wind')">Wind</button>
 <button class="sec" onclick="test('official')">Official</button>
 <button class="sec" onclick="test('frost')">Frost</button>
-<button class="sec" onclick="test('tank')">Tank</button>
+<button class="sec" onclick="test('grey')">Grey tank</button>
+<button class="sec" onclick="test('greynow')">Heater on</button>
+<button class="sec" onclick="test('tank')">Fresh tank</button>
 <button class="sec" onclick="test('rain')">Rain</button>
 </div>
 <div id="msg"></div>

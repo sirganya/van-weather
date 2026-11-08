@@ -73,14 +73,14 @@ Forecast directions are model output at 10 m; terrain funnels wind, so treat the
 
 ## Frost and water tanks
 
-Two separate alerts:
-
-- **Frost** (normal priority): first hour at or below 0 °C and when it thaws. Informational.
-- **TANK FREEZE RISK** (high priority): a spell at or below −2 °C lasting 4 hours or more, or any single hour at or below −5 °C. Gives when the spell starts, when it ends, its length, the coldest hour, and whether more spells follow in the 48-hour window. When this fires, the plain frost alert is suppressed.
+- **GREY TANK — heater on by …** (high priority): the external grey tank. A spell at or below 0 °C lasting 2 hours or more, or any hour at or below −2 °C, anywhere in the 48-hour window. Title gives the time to have the heater on (an hour before the spell); body gives spell start, end, length, coldest hour, and whether more spells follow.
+- **GREY TANK HEATER ON — freezing in Nh** (emergency, repeats until acknowledged): same spell, sent once it is within 3 hours. This is the one to act on.
+- **FRESH TANK FREEZE RISK** (high priority): the inboard fresh tank. A spell at or below −2 °C for 4 hours or more, or any hour at or below −5 °C.
+- **Frost** (normal priority): only sent when neither tank alert fires — in practice rarely, since the grey threshold is 0 °C.
 
 ## Tuning
 
-Thresholds live in `wrangler.toml` under `[vars]`: gust warning/severe speeds (km/h), frost temperature, tank-freeze temperature/duration/hard limit, rain (24h total or a single torrential hour). Defaults: 70/90 km/h, 0 °C, −2 °C for 4 h or −5 °C, 40 mm/24h or 10 mm/h. `FORECAST_HOURS` (default 48) is how far ahead wind, frost and tank checks look.
+Thresholds live in `wrangler.toml` under `[vars]`: gust warning/severe speeds (km/h), frost temperature, grey-tank and fresh-tank temperature/duration/hard limits, grey-tank lead time, rain (24h total or a single torrential hour). Defaults: 70/90 km/h; frost 0 °C; grey 0 °C for 2 h or −2 °C with 3 h lead; fresh −2 °C for 4 h or −5 °C; rain 40 mm/24h or 10 mm/h. `FORECAST_HOURS` (default 48) is how far ahead wind, frost and tank checks look.
 
 ## Known limits
 
