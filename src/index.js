@@ -200,7 +200,7 @@ async function meteoalarm(place) {
   const slug = FEEDS[place.country];
   if (!slug) return { feed: null, total: 0, alerts: [] };
   const feed = `https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-${slug}`;
-  const r = await fetch(feed, { headers: { "user-agent": "van-weather/1.0", accept: "application/atom+xml" } });
+  const r = await fetch(feed, { headers: { "user-agent": "Mozilla/5.0 (compatible; van-weather/1.0)", accept: "*/*" } });
   if (!r.ok) throw new Error(`meteoalarm ${r.status}`);
   const xml = await r.text();
 
