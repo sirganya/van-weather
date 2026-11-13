@@ -144,7 +144,7 @@ async function runCheck(env, { force }) {
     checked: new Date(now).toISOString(),
     loc,
     place,
-    official: { feed: official.feed, matched: official.alerts.length, total: official.total, error: official.error },
+    official: { feed: official.feed, matched: official.alerts.length, total: official.total, note: official.note, error: official.error },
     forecast: { summary: forecast.summary, alerts: forecast.alerts.map((a) => a.id), error: forecast.error },
     pushed,
     pushErrors: pushErrors.length ? pushErrors : undefined,
@@ -199,16 +199,32 @@ const COLOUR = { 4: "RED", 3: "ORANGE", 2: "YELLOW", 1: "green" };
 async function meteoalarm(place) {
   const slug = FEEDS[place.country];
   if (!slug) return { feed: null, total: 0, alerts: [] };
-  const feed = `https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-${slug}`;
-  const r = await fetch(feed, { headers: { "user-agent": "Mozilla/5.0 (compatible; van-weather/1.0)", accept: "*/*" } });
-  if (!r.ok) throw new Error(`meteoalarm ${r.status}`);
-  const xml = await r.text();
+  const errors = [];
+  // 1. Legacy Atom feed
+  const atomUrl = `https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-${slug}`;
+  try {
+    const r = await fetch(atomUrl, { headers: { "user-agent": "van-weather/1.0 (+https://github.com/sirganya/van-weather)", accept: "application/atom+xml, application/xml, text/xml, */*" } });
+    if (!r.ok) throw new Error(`atom ${r.status} ${r.headers.get("content-type") || ""}: ${(await r.text()).replace(/\s+/g, " ").slice(0, 160)}`);
+    const xml = await r.text();
+    const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map((m) => m[1]);
+    return { feed: atomUrl, total: entries.length, alerts: matchAtom(entries, place) };
+  } catch (e) { errors.push(String(e.message || e)); }
+  // 2. JSON API
+  const apiUrl = `https://feeds.meteoalarm.org/api/v1/warnings/feeds-${slug}`;
+  try {
+    const r = await fetch(apiUrl, { headers: { "user-agent": "van-weather/1.0 (+https://github.com/sirganya/van-weather)", accept: "application/json" } });
+    if (!r.ok) throw new Error(`api ${r.status} ${r.headers.get("content-type") || ""}: ${(await r.text()).replace(/\s+/g, " ").slice(0, 160)}`);
+    const j = await r.json();
+    const warnings = j.warnings || j.alerts || (Array.isArray(j) ? j : []);
+    return { feed: apiUrl, total: warnings.length, alerts: matchJson(warnings, place), note: errors[0] };
+  } catch (e) { errors.push(String(e.message || e)); }
+  throw new Error("meteoalarm: " + errors.join(" | "));
+}
 
-  const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map((m) => m[1]);
+function matchAtom(entries, place) {
   const mine = norm(place.names);
   const now = Date.now();
   const alerts = [];
-
   for (const e of entries) {
     const tag = (t) => (e.match(new RegExp(`<${t}[^>]*>([\\s\\S]*?)</${t}>`)) || [])[1]?.trim();
     const area = tag("cap:areaDesc") || "";
@@ -218,30 +234,55 @@ async function meteoalarm(place) {
     if (msgType === "Cancel") continue;
     const expires = Date.parse(tag("cap:expires") || "");
     if (expires && expires < now) continue;
-
-    // Area match: Meteoalarm area name vs the administrative names at our position.
     const a = norm([area]);
     if (!a.some((x) => mine.some((y) => x === y || x.includes(y) || y.includes(x)))) continue;
-
     const sev = tag("cap:severity") || "Minor";
     const level = SEVERITY[sev] || 1;
-    if (level < 2) continue; // skip green/minor
+    if (level < 2) continue;
     const event = tag("cap:event") || tag("title") || "Weather warning";
     const onset = tag("cap:onset") || tag("cap:effective");
     const link = (e.match(/<link[^>]*href="([^"]+)"/) || [])[1];
     const id = "ma:" + (tag("id") || tag("cap:identifier") || `${event}:${area}:${onset}`);
-
-    alerts.push({
-      id,
-      level,
-      priority: level >= 3 ? 5 : 4,
-      title: `${COLOUR[level]} ${event} — ${area}`,
-      body: `${fmtRange(onset, tag("cap:expires"))}\n${(tag("cap:description") || tag("summary") || "").replace(/<[^>]+>/g, "").slice(0, 400)}`.trim(),
-      link,
-      until: expires || undefined,
-    });
+    alerts.push(officialAlert({ id, level, event, area, onset, expires: tag("cap:expires"), expiresMs: expires, description: tag("cap:description") || tag("summary") || "", link }));
   }
-  return { feed, total: entries.length, alerts };
+  return alerts;
+}
+
+// Meteoalarm JSON API: [{ alert: { identifier, status, msgType, info: [{ language, event, severity, onset, expires, description, area: [{ areaDesc }] }] }, uuid }]
+function matchJson(warnings, place) {
+  const mine = norm(place.names);
+  const now = Date.now();
+  const alerts = [];
+  for (const w of warnings) {
+    const alert = w.alert || w;
+    if (alert.status && alert.status !== "Actual") continue;
+    if (alert.msgType === "Cancel") continue;
+    const infos = Array.isArray(alert.info) ? alert.info : [alert.info].filter(Boolean);
+    const info = infos.find((i) => /^en/i.test(i.language || "")) || infos[0];
+    if (!info) continue;
+    const expiresMs = Date.parse(info.expires || "");
+    if (expiresMs && expiresMs < now) continue;
+    const areas = (Array.isArray(info.area) ? info.area : [info.area]).filter(Boolean).map((a) => a.areaDesc || "");
+    const hit = areas.find((area) => norm([area]).some((x) => mine.some((y) => x === y || x.includes(y) || y.includes(x))));
+    if (!hit) continue;
+    const level = SEVERITY[info.severity] || 1;
+    if (level < 2) continue;
+    const id = "ma:" + (alert.identifier || w.uuid || `${info.event}:${hit}:${info.onset}`);
+    alerts.push(officialAlert({ id, level, event: info.event || "Weather warning", area: hit, onset: info.onset || info.effective, expires: info.expires, expiresMs, description: info.description || "", link: info.web }));
+  }
+  return alerts;
+}
+
+function officialAlert({ id, level, event, area, onset, expires, expiresMs, description, link }) {
+  return {
+    id,
+    level,
+    priority: level >= 3 ? 5 : 4,
+    title: `${COLOUR[level]} ${event} — ${area}`,
+    body: `${fmtRange(onset, expires)}\n${description.replace(/<[^>]+>/g, "").slice(0, 400)}`.trim(),
+    link,
+    until: expiresMs || undefined,
+  };
 }
 
 function norm(list) {

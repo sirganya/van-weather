@@ -157,3 +157,19 @@ await call("/check?token=s3cret");
 const nowPush = pushes.find((p) => p.po && /^GREY TANK HEATER ON — freezing in 2h/.test(p.po.title));
 assert(nowPush && nowPush.po.priority === "2", "heater-on emergency fires when spell is 2h away");
 assert(!JSON.parse(store.get("last")).forecast.alerts.some((a) => a.startsWith("fc:tank")), "fresh tank not alerted at -1°C");
+
+// 11. Atom feed refuses (406) → JSON API fallback still matches the county
+const jsonApi = [{ uuid: "u1", alert: { identifier: "IE-json-1", status: "Actual", msgType: "Alert", info: [
+  { language: "en-GB", event: "Wind", severity: "Moderate", onset: "2026-11-01T18:00:00Z", expires: "2099-01-01T00:00:00Z", description: "Yellow wind warning.", area: [{ areaDesc: "Mayo" }] },
+  { language: "en-GB", event: "Rain", severity: "Moderate", onset: "2026-11-01T18:00:00Z", expires: "2099-01-01T00:00:00Z", description: "x", area: [{ areaDesc: "Cork" }] } ] } }];
+globalThis.fetch = ((orig) => async (u, i) => {
+  const url = String(u);
+  if (url.includes("meteoalarm-legacy-atom")) return new Response("Not Acceptable", { status: 406 });
+  if (url.includes("/api/v1/warnings/")) return Response.json(jsonApi);
+  return orig(u, i);
+})(globalThis.fetch);
+store.set("sent", "{}");
+await call("/check?token=s3cret");
+const l2 = JSON.parse(store.get("last"));
+assert(l2.official.feed.includes("/api/v1/") && l2.official.matched === 1 && /406/.test(l2.official.note), `JSON fallback used after 406 (matched ${l2.official.matched})`);
+assert(pushes.at(-1).po.title.startsWith("YELLOW Wind — Mayo") || pushes.some((p) => p.po && p.po.title.startsWith("YELLOW Wind — Mayo")), "JSON-sourced warning pushed");
