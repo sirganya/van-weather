@@ -50,6 +50,10 @@ Open the Worker URL in Safari, add it to the home screen, tap **I'm here** whene
 
 Token goes in `Authorization: Bearer …`, Basic auth password, or `?token=`.
 
+## Add to calendar
+
+Every alert carries an **Add to calendar** button (Pushover's link button). It opens a calendar file for the alert's window — the strong-wind hours, the cold spell, the warning's validity — and iOS offers to add it, with a reminder an hour before. Links are random, unguessable, and expire after 14 days. `BASE_URL` in `wrangler.toml` must be the Worker's own URL for the links to work.
+
 ## Wind alerts
 
 Built for deciding how to park. Each wind alert gives:

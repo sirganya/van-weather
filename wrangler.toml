@@ -12,6 +12,8 @@ id = "161ea7ca42f0406dbb72a57b716e783a"
 
 # Thresholds and settings. Change here or override in the dashboard.
 [vars]
+# The Worker's own URL, used to build "Add to calendar" links in alerts.
+BASE_URL = "https://van-weather.quickpointme.workers.dev"
 # Open-Meteo forecast thresholds (next 24h at your parked location)
 GUST_WARN_KMH = "70"       # push a warning at this gust speed
 GUST_SEVERE_KMH = "90"     # push a high-priority warning at this gust speed

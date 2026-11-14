@@ -12,6 +12,10 @@ export default {
     // The page itself is just static HTML; it shows nothing until the token is right.
     if (path === "/" && request.method === "GET") return page(env);
 
+    // Calendar file for an alert. Ids are random, so no token needed (the link lives in the push itself).
+    const ics = path.match(/^\/ics\/([A-Za-z0-9_-]{16,})\.ics$/);
+    if (ics && request.method === "GET") return serveIcs(env, ics[1]);
+
     // Record every attempt to post a location, even bad ones, so OwnTracks problems are visible in /status.
     const isLoc = path === "/loc" && request.method === "POST";
     const authed = authorised(request, url, env);
@@ -29,7 +33,7 @@ export default {
       try {
         const type = url.searchParams.get("type") || "push";
         const a = await sampleAlert(env, type);
-        const res = await notify(env, { title: `TEST — ${a.title}`, body: a.body, priority: a.priority, click: a.link });
+        const res = await notify(env, { title: `TEST — ${a.title}`, body: a.body, priority: a.priority, click: await calendarLink(env, { ...a, title: `TEST — ${a.title}` }, null) });
         return json({ ok: true, type, sent: res, title: a.title, body: a.body, priority: a.priority });
       } catch (e) {
         return json({ ok: false, error: String(e.message || e), pushoverConfigured: !!(env.PUSHOVER_TOKEN && env.PUSHOVER_USER) });
@@ -149,7 +153,7 @@ async function runCheck(env, { force }) {
           title: a.title,
           body: a.body + (place.label ? `\n📍 ${place.label}` : ""),
           priority: a.priority,
-                    click: a.link,
+          click: await calendarLink(env, a, place),
         });
         sent[a.id] = { level: a.level, until: a.until || now + 12 * 3600e3 };
         pushed.push(a.id);
@@ -332,8 +336,10 @@ function officialAlert({ id, level, event, area, onset, expires, expiresMs, desc
     level,
     priority: level >= 3 ? 5 : 4,
     title: `${COLOUR[level]} ${event} — ${area}`,
-    body: `${fmtRange(onset, expires)}\n${description.replace(/<[^>]+>/g, "").slice(0, 400)}`.trim(),
+    body: `${fmtRange(onset, expires)}\n${description.replace(/<[^>]+>/g, "").slice(0, 400)}${link ? `\n${link}` : ""}`.trim(),
     link,
+    start: isNaN(Date.parse(onset)) ? undefined : new Date(onset).toISOString(),
+    end: expiresMs ? new Date(expiresMs).toISOString() : undefined,
     until: expiresMs || undefined,
   };
 }
@@ -378,6 +384,10 @@ async function openMeteo(env, loc) {
   const d = await r.json();
   const h = d.hourly;
   const temps = h.temperature_2m, rain = h.precipitation, times = h.time;
+  // Open-Meteo returns local times; convert to UTC for calendar entries.
+  const off = (d.utc_offset_seconds || 0) * 1000;
+  const utc = (i) => new Date(Date.parse(times[Math.min(i, times.length - 1)] + ":00Z") - off).toISOString();
+  const utcEnd = (i) => (i < times.length ? utc(i) : new Date(Date.parse(times[times.length - 1] + ":00Z") - off + 3600e3).toISOString());
 
   const minT = Math.min(...temps), iT = temps.indexOf(minT);
   const rain24 = rain.slice(0, 24).reduce((s, x) => s + (x || 0), 0);
@@ -393,6 +403,8 @@ async function openMeteo(env, loc) {
       priority: wind.severe ? 5 : 4,
       title: wind.title,
       body: wind.body,
+      start: utc(wind.windows[0].from),
+      end: utcEnd(wind.windows[0].to + 1),
     });
   }
   // Grey tank (external, heated): more sensitive. Heads-up when the spell first appears in the
@@ -412,6 +424,8 @@ async function openMeteo(env, loc) {
       priority: 4,
       title: `GREY TANK — heater on by ${onBy}`,
       body: grey.body,
+      start: utc(Math.max(0, grey.start - 1)),
+      end: utcEnd(grey.end + 1),
     });
     if (grey.start <= lead) {
       alerts.push({
@@ -420,6 +434,8 @@ async function openMeteo(env, loc) {
         priority: 5,
         title: grey.start === 0 ? "GREY TANK HEATER ON — freezing now" : `GREY TANK HEATER ON — freezing in ${grey.start}h`,
         body: grey.body,
+        start: utc(grey.start),
+        end: utcEnd(grey.end + 1),
       });
     }
   }
@@ -436,6 +452,8 @@ async function openMeteo(env, loc) {
       priority: 4,
       title: `FRESH TANK FREEZE RISK — down to ${tank.min.toFixed(1)}°C`,
       body: tank.body,
+      start: utc(tank.start),
+      end: utcEnd(tank.end + 1),
     });
   }
   const frostC = +env.FROST_C || 0;
@@ -446,6 +464,8 @@ async function openMeteo(env, loc) {
       priority: 3,
       title: `Frost — down to ${minT.toFixed(1)}°C`,
       body: `From ${fmtT(times[temps.findIndex((t) => t <= frostC)])}${frostEnd(temps, times, frostC)}.`,
+      start: utc(temps.findIndex((t) => t <= frostC)),
+      end: utcEnd(frostEndIndex(temps, frostC)),
     });
   }
   // Serious rain only: a big 24h total, or a torrential hour. Ordinary wet days don't alert.
@@ -459,6 +479,8 @@ async function openMeteo(env, loc) {
       priority: 3,
       title: torrential ? `Torrential rain — ${Math.round(maxHr)} mm/h` : `Heavy rain — ${Math.round(rain24)} mm in 24h`,
       body: torrential ? `Heaviest ${fmtT(times[iHr])}; ${Math.round(rain24)} mm over 24h.` : `Starts ${fmtT(times[Math.max(0, rain.findIndex((x) => x >= 1))])}.`,
+      start: utc(torrential ? iHr : Math.max(0, rain.findIndex((x) => x >= 1))),
+      end: utcEnd(torrential ? iHr + 1 : 24),
     });
   }
   return {
@@ -491,6 +513,15 @@ function coldSpell(temps, times, { cold, hours, hard }) {
     i = j + 1;
   }
   return null;
+}
+
+// index of the first hour after the first frost spell (or length if it runs to the end)
+function frostEndIndex(temps, frostC) {
+  const i = temps.findIndex((t) => t <= frostC);
+  if (i < 0) return temps.length;
+  let j = i;
+  while (j + 1 < temps.length && temps[j + 1] <= frostC) j++;
+  return j + 1;
 }
 
 // " until Mon 09:00" if the forecast shows the thaw, else ""
@@ -575,6 +606,47 @@ function windOutlook(h, { warn, severe }) {
   return out;
 }
 
+// ---------------------------------------------------------------- calendar (.ics) for an alert
+
+// Stores the alert and returns a link to an .ics file for it; iOS opens it with "Add to Calendar".
+async function calendarLink(env, a, place) {
+  if (!env.BASE_URL || !a.start) return a.link;
+  const id = randomId();
+  const ev = { title: a.title, body: a.body, start: a.start, end: a.end || new Date(Date.parse(a.start) + 3600e3).toISOString(), location: place?.label || "" };
+  await env.WX.put(`ics:${id}`, JSON.stringify(ev), { expirationTtl: 14 * 86400 });
+  return `${env.BASE_URL.replace(/\/$/, "")}/ics/${id}.ics`;
+}
+
+function randomId() {
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function serveIcs(env, id) {
+  const ev = await env.WX.get(`ics:${id}`, "json");
+  if (!ev) return new Response("expired", { status: 404 });
+  const stamp = (iso) => new Date(iso).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const esc = (t) => String(t).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+  const lines = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//van-weather//EN", "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    `UID:${id}@van-weather`,
+    `DTSTAMP:${stamp(new Date().toISOString())}`,
+    `DTSTART:${stamp(ev.start)}`,
+    `DTEND:${stamp(ev.end)}`,
+    `SUMMARY:${esc(ev.title)}`,
+    `DESCRIPTION:${esc(ev.body)}`,
+    ev.location ? `LOCATION:${esc(ev.location)}` : null,
+    "BEGIN:VALARM", "ACTION:DISPLAY", `DESCRIPTION:${esc(ev.title)}`, "TRIGGER:-PT1H", "END:VALARM",
+    "END:VEVENT", "END:VCALENDAR",
+  ].filter(Boolean);
+  // fold long lines per RFC 5545
+  const folded = lines.flatMap((l) => { const out = []; while (l.length > 73) { out.push(l.slice(0, 73)); l = " " + l.slice(73); } out.push(l); return out; });
+  return new Response(folded.join("\r\n") + "\r\n", {
+    headers: { "content-type": "text/calendar; charset=utf-8", "content-disposition": `inline; filename="van-weather.ics"`, "cache-control": "no-store" },
+  });
+}
+
 // ---------------------------------------------------------------- sample alerts for the test buttons
 // Each one goes through the same formatting code as a real alert, with realistic sample data,
 // and at the priority the real alert would use — so a wind test will nag until acknowledged.
@@ -585,6 +657,7 @@ async function sampleAlert(env, type) {
   const tag = place.label ? `\n📍 ${place.label}` : "";
   const start = new Date(); start.setMinutes(0, 0, 0);
   const times = Array.from({ length: 36 }, (_, i) => new Date(start.getTime() + i * 3600e3).toISOString().slice(0, 16));
+  const at = (i) => new Date(start.getTime() + i * 3600e3).toISOString();
 
   if (type === "wind") {
     const h = {
@@ -594,22 +667,22 @@ async function sampleAlert(env, type) {
       wind_direction_10m: times.map((_, i) => (i < 9 ? 215 : i < 12 ? 260 : 305)),
     };
     const w = windOutlook(h, { warn: +env.GUST_WARN_KMH || 70, severe: +env.GUST_SEVERE_KMH || 90 });
-    return { title: w.title, body: w.body + tag, priority: 5 };
+    return { title: w.title, body: w.body + tag, priority: 5, start: at(6), end: at(15) };
   }
   if (type === "grey") {
-    return { title: `GREY TANK — heater on by ${fmtT(times[22])}`, body: `Below 0°C from ${fmtT(times[23])} until ${fmtT(times[33])} (10h)\nColdest -3.1°C ${fmtT(times[29])}${tag}`, priority: 4 };
+    return { title: `GREY TANK — heater on by ${fmtT(times[22])}`, body: `Below 0°C from ${fmtT(times[23])} until ${fmtT(times[33])} (10h)\nColdest -3.1°C ${fmtT(times[29])}${tag}`, priority: 4, start: at(22), end: at(34) };
   }
   if (type === "greynow") {
-    return { title: "GREY TANK HEATER ON — freezing in 2h", body: `Below 0°C from ${fmtT(times[2])} until ${fmtT(times[12])} (10h)\nColdest -3.1°C ${fmtT(times[8])}${tag}`, priority: 5 };
+    return { title: "GREY TANK HEATER ON — freezing in 2h", body: `Below 0°C from ${fmtT(times[2])} until ${fmtT(times[12])} (10h)\nColdest -3.1°C ${fmtT(times[8])}${tag}`, priority: 5, start: at(2), end: at(13) };
   }
   if (type === "tank") {
-    return { title: "FRESH TANK FREEZE RISK — down to -4.6°C", body: `Below -2°C from ${fmtT(times[15])} until ${fmtT(times[23])} (8h)\nColdest -4.6°C ${fmtT(times[20])}\n1 more cold spell later in the forecast${tag}`, priority: 4 };
+    return { title: "FRESH TANK FREEZE RISK — down to -4.6°C", body: `Below -2°C from ${fmtT(times[15])} until ${fmtT(times[23])} (8h)\nColdest -4.6°C ${fmtT(times[20])}\n1 more cold spell later in the forecast${tag}`, priority: 4, start: at(15), end: at(24) };
   }
   if (type === "frost") {
-    return { title: "Frost — down to -2.4°C", body: `From ${fmtT(times[17])} until ${fmtT(times[23])}.${tag}`, priority: 3 };
+    return { title: "Frost — down to -2.4°C", body: `From ${fmtT(times[17])} until ${fmtT(times[23])}.${tag}`, priority: 3, start: at(17), end: at(23) };
   }
   if (type === "rain") {
-    return { title: "Heavy rain — 42 mm in 24h", body: `Starts ${fmtT(times[5])}.${tag}`, priority: 3 };
+    return { title: "Heavy rain — 42 mm in 24h", body: `Starts ${fmtT(times[5])}.${tag}`, priority: 3, start: at(5), end: at(29) };
   }
   if (type === "official") {
     const area = (place.names?.find((n) => !/ireland|connacht|munster|leinster|ulster/i.test(n)) || "Mayo").replace(/^County /, "");
@@ -618,6 +691,7 @@ async function sampleAlert(env, type) {
       body: `${fmtRange(times[6] + ":00", times[18] + ":00")}\nSouthwest winds veering westerly will reach mean speeds of 65 to 80 km/h with gusts of 110 to 130 km/h.${tag}`,
       priority: 5,
       link: "https://www.meteoalarm.org",
+      start: at(6), end: at(18),
     };
   }
   return { title: "van-weather", body: "Push is working.", priority: 3 };
@@ -643,7 +717,7 @@ async function pushover(env, { title, body, priority, click }) {
     sound: p === 2 ? "siren" : p === 1 ? "alien" : "pushover",
   });
   if (p === 2) { form.set("retry", "300"); form.set("expire", "3600"); } // nag every 5 min for up to an hour
-  if (click) { form.set("url", click); form.set("url_title", "Open warning"); }
+  if (click) { form.set("url", click); form.set("url_title", /\.ics$/.test(click) ? "Add to calendar" : "Open warning"); }
   if (env.PUSHOVER_DEVICE) form.set("device", env.PUSHOVER_DEVICE);
   const r = await fetch("https://api.pushover.net/1/messages.json", { method: "POST", body: form });
   const j = await r.json().catch(() => ({}));

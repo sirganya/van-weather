@@ -7,7 +7,7 @@ const WX = {
   put: async (k, v) => { store.set(k, v); },
   delete: async (k) => { store.delete(k); },
 };
-const env = { WX, TOKEN: "s3cret", PUSHOVER_TOKEN: "apptoken", PUSHOVER_USER: "userkey", GUST_WARN_KMH: "70", GUST_SEVERE_KMH: "90", FROST_C: "0", RAIN_24H_MM: "40", RAIN_HOURLY_MM: "10", FORECAST_HOURS: "48", GREY_FREEZE_C: "0", GREY_FREEZE_HOURS: "2", GREY_HARD_C: "-2", GREY_LEAD_HOURS: "3", TANK_FREEZE_C: "-2", TANK_FREEZE_HOURS: "4", TANK_HARD_C: "-5" };
+const env = { WX, BASE_URL: "https://van.example", TOKEN: "s3cret", PUSHOVER_TOKEN: "apptoken", PUSHOVER_USER: "userkey", GUST_WARN_KMH: "70", GUST_SEVERE_KMH: "90", FROST_C: "0", RAIN_24H_MM: "40", RAIN_HOURLY_MM: "10", FORECAST_HOURS: "48", GREY_FREEZE_C: "0", GREY_FREEZE_HOURS: "2", GREY_HARD_C: "-2", GREY_LEAD_HOURS: "3", TANK_FREEZE_C: "-2", TANK_FREEZE_HOURS: "4", TANK_HARD_C: "-5" };
 
 const pushes = [];
 const meteoalarmXml = `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom" xmlns:cap="urn:oasis:names:tc:emergency:cap:1.2">
@@ -195,3 +195,16 @@ globalThis.fetch = ((orig) => async (u, i) => (String(u).includes("nominatim") ?
 await call("/check?token=s3cret");
 l3 = JSON.parse(store.get("last"));
 assert(l3.place.country === null && store.get("place") === undefined && /no country/.test(l3.official.error), "geocode failure not cached, reported in status");
+
+// 14. alerts carry an "Add to calendar" link that serves a valid .ics
+const withCal = pushes.filter((p) => p.po && /\.ics$/.test(p.po.url || ""));
+assert(withCal.length > 0 && withCal.every((p) => p.po.url_title === "Add to calendar"), "pushes carry calendar links");
+const icsUrl = new URL(withCal[0].po.url);
+r = await call(icsUrl.pathname);
+const icsText = await r.text();
+assert(r.status === 200 && /text\/calendar/.test(r.headers.get("content-type")) && /BEGIN:VEVENT/.test(icsText) && /DTSTART:\d{8}T\d{6}Z/.test(icsText) && /SUMMARY:/.test(icsText), "ics served with UTC times");
+assert((await call("/ics/nope-nope-nope-nope.ics")).status === 404, "unknown ics id → 404");
+// wind alert event spans the strong window (test data: hours 6–15 local = UTC in test)
+const windCal = withCal.find((p) => /^SEVERE WIND/.test(p.po.title));
+const windIcs = await (await call(new URL(windCal.po.url).pathname)).text();
+assert(/DTSTART:20261101T180000Z/.test(windIcs) && /DTEND:20261102T030000Z/.test(windIcs), "wind event = strong window");
