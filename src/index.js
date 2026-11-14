@@ -12,8 +12,15 @@ export default {
     // The page itself is just static HTML; it shows nothing until the token is right.
     if (path === "/" && request.method === "GET") return page(env);
 
+    // Record every attempt to post a location, even bad ones, so OwnTracks problems are visible in /status.
+    const isLoc = path === "/loc" && request.method === "POST";
+    const authed = authorised(request, url, env);
+    if (isLoc && !authed) {
+      await logPost(env, request, 401, "bad or missing token");
+      return new Response("unauthorised", { status: 401 });
+    }
     // Everything below needs the shared token.
-    if (!authorised(request, url, env)) return new Response("unauthorised", { status: 401 });
+    if (!authed) return new Response("unauthorised", { status: 401 });
 
     if (path === "/status") return json(await status(env));
     if (path === "/loc" && request.method === "POST") return receiveLocation(request, env);
@@ -65,16 +72,22 @@ async function receiveLocation(request, env) {
     else if (ct.includes("form")) body = Object.fromEntries(await request.formData());
     else body = JSON.parse(await request.text() || "{}");
   } catch {
+    await logPost(env, request, 400, "unparseable body");
     return new Response("bad body", { status: 400 });
   }
   // OwnTracks sends {_type:"location", lat, lon, tst, acc}. Ignore its other message types.
-  if (body._type && body._type !== "location") return json([]);
+  if (body._type && body._type !== "location") {
+    await logPost(env, request, 200, `ignored _type=${body._type}`);
+    return json([]);
+  }
 
   const lat = Number(body.lat ?? body.latitude);
   const lon = Number(body.lon ?? body.lng ?? body.longitude);
   if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    await logPost(env, request, 400, "no lat/lon in body: " + JSON.stringify(body).slice(0, 120));
     return new Response("need lat/lon", { status: 400 });
   }
+  await logPost(env, request, 200, body._type ? "owntracks location accepted" : "manual location accepted");
   const prev = await env.WX.get("loc", "json");
   const loc = {
     lat: +lat.toFixed(4),
@@ -92,6 +105,14 @@ async function receiveLocation(request, env) {
   }
   // OwnTracks expects a JSON array back.
   return json(body._type ? [] : { ok: true, loc });
+}
+
+async function logPost(env, request, status, note) {
+  try {
+    const log = (await env.WX.get("posts", "json")) || [];
+    log.unshift({ at: new Date().toISOString(), status, note, ua: (request.headers.get("user-agent") || "").slice(0, 60), ct: request.headers.get("content-type") || "" });
+    await env.WX.put("posts", JSON.stringify(log.slice(0, 10)));
+  } catch {}
 }
 
 function distKm(a, b) {
@@ -601,12 +622,13 @@ async function pushover(env, { title, body, priority, click }) {
 // ---------------------------------------------------------------- status + manual page
 
 async function status(env) {
-  const [loc, last, place] = await Promise.all([
+  const [loc, last, place, posts] = await Promise.all([
     env.WX.get("loc", "json"),
     env.WX.get("last", "json"),
     env.WX.get("place", "json"),
+    env.WX.get("posts", "json"),
   ]);
-  return { loc, place, last };
+  return { loc, place, recentPosts: posts || [], last };
 }
 
 function json(x) {

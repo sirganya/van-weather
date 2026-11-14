@@ -173,3 +173,8 @@ await call("/check?token=s3cret");
 const l2 = JSON.parse(store.get("last"));
 assert(l2.official.feed.includes("/api/v1/") && l2.official.matched === 1 && /406/.test(l2.official.note), `JSON fallback used after 406 (matched ${l2.official.matched})`);
 assert(pushes.at(-1).po.title.startsWith("YELLOW Wind — Mayo") || pushes.some((p) => p.po && p.po.title.startsWith("YELLOW Wind — Mayo")), "JSON-sourced warning pushed");
+
+// 12. post attempts are logged, including rejected ones
+await call("/loc", { method: "POST", headers: { "content-type": "application/json", authorization: "Basic " + btoa("greg:wrongpw"), "user-agent": "OwnTracks/1.0" }, body: JSON.stringify({ _type: "location", lat: 1, lon: 1 }) });
+r = await call("/status?token=s3cret"); const st = await r.json();
+assert(st.recentPosts[0].status === 401 && /OwnTracks/.test(st.recentPosts[0].ua) && st.recentPosts.some((p) => /owntracks location accepted/.test(p.note)), "post log shows rejected OwnTracks attempt and earlier success");
