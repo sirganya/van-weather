@@ -178,3 +178,20 @@ assert(pushes.at(-1).po.title.startsWith("YELLOW Wind — Mayo") || pushes.some(
 await call("/loc", { method: "POST", headers: { "content-type": "application/json", authorization: "Basic " + btoa("greg:wrongpw"), "user-agent": "OwnTracks/1.0" }, body: JSON.stringify({ _type: "location", lat: 1, lon: 1 }) });
 r = await call("/status?token=s3cret"); const st = await r.json();
 assert(st.recentPosts[0].status === 401 && /OwnTracks/.test(st.recentPosts[0].ua) && st.recentPosts.some((p) => /owntracks location accepted/.test(p.note)), "post log shows rejected OwnTracks attempt and earlier success");
+
+// 13. BigDataCloud fails → Nominatim fallback; failures are not cached
+store.delete("place");
+globalThis.fetch = ((orig) => async (u, i) => {
+  const url = String(u);
+  if (url.includes("bigdatacloud")) return new Response("", { status: 500 });
+  if (url.includes("nominatim")) return Response.json({ address: { town: "Gorey", county: "County Wexford", state: "Leinster", country: "Ireland", country_code: "ie" } });
+  return orig(u, i);
+})(globalThis.fetch);
+await call("/check?token=s3cret");
+let l3 = JSON.parse(store.get("last"));
+assert(l3.place.country === "IE" && l3.place.source === "nominatim" && /Gorey/.test(l3.place.label), "nominatim fallback resolves Wexford");
+store.delete("place");
+globalThis.fetch = ((orig) => async (u, i) => (String(u).includes("nominatim") ? new Response("", { status: 503 }) : orig(u, i)))(globalThis.fetch);
+await call("/check?token=s3cret");
+l3 = JSON.parse(store.get("last"));
+assert(l3.place.country === null && store.get("place") === undefined && /no country/.test(l3.official.error), "geocode failure not cached, reported in status");

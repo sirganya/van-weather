@@ -165,7 +165,7 @@ async function runCheck(env, { force }) {
     checked: new Date(now).toISOString(),
     loc,
     place,
-    official: { feed: official.feed, matched: official.alerts.length, total: official.total, note: official.note, error: official.error },
+    official: { feed: official.feed, matched: official.alerts.length, total: official.total, note: official.note, error: official.error || (place.country ? undefined : "no country: " + place.error) },
     forecast: { summary: forecast.summary, alerts: forecast.alerts.map((a) => a.id), error: forecast.error },
     pushed,
     pushErrors: pushErrors.length ? pushErrors : undefined,
@@ -178,28 +178,60 @@ async function runCheck(env, { force }) {
 
 async function resolvePlace(env, loc) {
   const cached = await env.WX.get("place", "json");
-  if (cached && cached.lat === loc.lat && cached.lon === loc.lon) return cached;
+  if (cached && cached.lat === loc.lat && cached.lon === loc.lon && cached.country) return cached;
 
+  const errors = [];
+  let place = null;
+  try { place = await geocodeBigDataCloud(loc); } catch (e) { errors.push("bdc: " + e.message); }
+  if (!place?.country) {
+    try { place = await geocodeNominatim(loc); } catch (e) { errors.push("osm: " + e.message); }
+  }
+  if (!place?.country) {
+    // Don't cache a failure; next run retries. Return what we have so the forecast part still runs.
+    return { lat: loc.lat, lon: loc.lon, country: null, label: "", names: [], error: errors.join(" | ") || "no country from geocoders" };
+  }
+  await env.WX.put("place", JSON.stringify(place), { expirationTtl: 7 * 86400 });
+  return place;
+}
+
+async function geocodeBigDataCloud(loc) {
   const r = await fetch(
     `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${loc.lat}&longitude=${loc.lon}&localityLanguage=en`,
     { headers: { "user-agent": "van-weather/1.0" } }
   );
-  const g = r.ok ? await r.json() : {};
+  if (!r.ok) throw new Error(`${r.status}`);
+  const g = await r.json();
+  if (!g.countryCode) throw new Error("no countryCode");
   // Collect every administrative name we can — Meteoalarm areas are named
   // differently per country (county, département, Landkreis, region...).
   const names = new Set();
   for (const a of g.localityInfo?.administrative || []) if (a.name) names.add(a.name);
   for (const k of ["principalSubdivision", "locality", "city"]) if (g[k]) names.add(g[k]);
-  const place = {
-    lat: loc.lat,
-    lon: loc.lon,
-    country: g.countryCode || null,
-    countryName: g.countryName || null,
+  return {
+    lat: loc.lat, lon: loc.lon,
+    country: g.countryCode, countryName: g.countryName || null,
     label: [g.locality || g.city, g.principalSubdivision, g.countryCode].filter(Boolean).join(", "),
-    names: [...names],
+    names: [...names], source: "bigdatacloud",
   };
-  await env.WX.put("place", JSON.stringify(place), { expirationTtl: 7 * 86400 });
-  return place;
+}
+
+async function geocodeNominatim(loc) {
+  const r = await fetch(
+    `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${loc.lat}&lon=${loc.lon}&zoom=10&accept-language=en`,
+    { headers: { "user-agent": "van-weather/1.0 (+https://github.com/sirganya/van-weather)" } }
+  );
+  if (!r.ok) throw new Error(`${r.status}`);
+  const g = await r.json();
+  const a = g.address || {};
+  if (!a.country_code) throw new Error("no country_code");
+  const names = new Set();
+  for (const k of ["county", "state_district", "state", "region", "province", "municipality", "city", "town", "village"]) if (a[k]) names.add(a[k]);
+  return {
+    lat: loc.lat, lon: loc.lon,
+    country: a.country_code.toUpperCase(), countryName: a.country || null,
+    label: [a.town || a.village || a.city || a.municipality, a.county || a.state, a.country_code.toUpperCase()].filter(Boolean).join(", "),
+    names: [...names], source: "nominatim",
+  };
 }
 
 // ---------------------------------------------------------------- Meteoalarm
